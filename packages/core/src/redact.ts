@@ -2,30 +2,71 @@
  * redact() — deep-walks any value and masks secret-shaped strings to `<prefix>…<last4>`.
  *
  * Rules (see PRD §11, FR-2.1, tasks/T-003.md):
- *  - Orbio/OpenRouter keys (`sk-or-...`)      -> `sk-or-…<last4>`
- *  - generic gateway keys (`sk-...`)          -> `sk-…<last4>`
- *  - `Bearer <token>`                          -> `Bearer <masked-token>`
- *  - JWT-looking `xxx.yyy.zzz` base64url       -> `<first4>…<last4>`
- *  - 0x-prefixed 64-hex private keys           -> `0x…<last4>` (fully masked)
- *  - long opaque blobs (>=32 [A-Za-z0-9_-])    -> `<first4>…<last4>`
- *  - object keys ending in _KEY/_SECRET/_TOKEN/_PK/_PASSWORD -> whole value masked, any shape
+ *  - Orbio/OpenRouter keys (`sk-or-...`, any case)   -> `sk-or-…<last4>`
+ *  - generic gateway keys (`sk-...`, any case)        -> `sk-…<last4>`
+ *  - `Bearer <token>`                                  -> `Bearer <masked-token>`
+ *  - JWT-looking `xxx.yyy.zzz` base64url               -> `<first4>…<last4>`
+ *  - 0x-prefixed 64-hex private keys                   -> `0x…<last4>` (fully masked)
+ *  - long opaque blobs (>=32 [A-Za-z0-9_-])            -> `<first4>…<last4>`
+ *  - object keys ending in _KEY/_SECRET/_TOKEN/_PK/_PASSWORD, or a camelCase/any-case
+ *    name ending in apiKey/secret/token/password/passwd/privateKey/mnemonic/seed/pk
+ *    -> whole value masked, any shape (string, number, object, array, Buffer, …)
  *
  * Explicitly NOT masked: normal words, short ids, 0x…40-hex addresses (public), UUIDs,
  * ISO dates, plain numbers.
  *
  * Secrets embedded in URLs (query strings, basic-auth userinfo) and inside Error
- * messages/stacks are caught because redaction is a plain string scan — it does not
- * need to understand URL or stack-trace syntax to find a token-shaped substring in one.
+ * messages/stacks/`cause` chains are caught because redaction is a plain string scan —
+ * it does not need to understand URL or stack-trace syntax to find a token-shaped
+ * substring in one.
+ *
+ * Non-plain values never pass through unmasked: class instances are walked like plain
+ * objects (own enumerable props), Map/Set are walked entry-by-entry, Buffer/TypedArray/
+ * ArrayBuffer become `<bytes:N>` (raw bytes are never emitted — a private key is
+ * routinely a Buffer/Uint8Array in ethers.js/viem/web3.js), BigInt is stringified, Date
+ * becomes its ISO string, and functions/symbols become `<fn>`. Circular references are
+ * tracked with a WeakSet and replaced with `<circular>` instead of throwing.
+ *
+ * ## 0x + 64-hex ambiguity: private key vs. transaction hash
+ * A private key and a transaction hash are both, by shape, `0x` followed by 64 hex
+ * characters — there is no way to tell them apart from the string alone. This module
+ * resolves the ambiguity by failing closed: **every** 0x+64-hex string is masked by
+ * default, including a harmless, publicly-verifiable tx hash. PRD §12 wants every
+ * on-site figure to link to an explorer, so over-masking a tx hash in a log line is a
+ * real but acceptable cost — a private key slipping through unmasked is not.
+ * A call site that knows a particular value is a public hash can opt it out of masking
+ * by key name via `redact(value, { allowTxHashKeys: [...] })` — see
+ * `DEFAULT_ALLOW_TX_HASH_KEYS`, which is what `log.ts` uses by default. This is an
+ * allow-list on the *key name*, never on content: a value's shape alone can never prove
+ * it isn't a private key, so there is deliberately no "looks like a tx hash" heuristic.
+ *
+ * ## Known, accepted gap
+ * A secret split across whitespace/newlines (e.g. word-wrapped output, a mangled env
+ * var) is only masked on the fragment that still matches a pattern — the module does
+ * not attempt to reassemble whitespace-broken tokens. Low real-world likelihood; not
+ * worth the false-positive risk of stitching arbitrary text back together.
  */
 
 const ELLIPSIS = '…';
 
+/** Object keys whose value `log.ts` leaves unmasked by default — see the ambiguity note above. */
+export const DEFAULT_ALLOW_TX_HASH_KEYS = ['txHash', 'hash', 'transactionHash'] as const;
+
+export interface RedactOptions {
+  /**
+   * Object keys (matched case-insensitively) whose value is left completely untouched —
+   * no masking, no recursion — because the call site knows it's a public identifier
+   * (e.g. a tx hash) that only happens to share the 0x+64-hex private-key shape.
+   */
+  allowTxHashKeys?: readonly string[];
+}
+
 // --- individual patterns (exported so tests can exercise each one directly) ---
 export const REDACTION_PATTERNS = {
-  /** Orbio / OpenRouter gateway keys, e.g. sk-or-v1-... */
-  openRouterKey: /sk-or-[A-Za-z0-9_-]{6,}/,
-  /** Generic `sk-...` style API keys (OpenAI-shaped etc.), not already sk-or- */
-  genericSecretKey: /\bsk-[A-Za-z0-9_-]{10,}\b/,
+  /** Orbio / OpenRouter gateway keys, e.g. sk-or-v1-... (any case) */
+  openRouterKey: /sk-or-[A-Za-z0-9_-]{6,}/i,
+  /** Generic `sk-...` style API keys (OpenAI-shaped etc.), not already sk-or- (any case) */
+  genericSecretKey: /\bsk-[A-Za-z0-9_-]{10,}\b/i,
   /** `Bearer <token>` authorization headers */
   bearerToken: /\bBearer\s+([^\s"'<>]+)/i,
   /** JWT-looking base64url triples: header.payload.signature */
@@ -34,23 +75,30 @@ export const REDACTION_PATTERNS = {
   privateKeyHex: /\b0x[0-9a-fA-F]{64}\b/,
   /** Long opaque token-shaped blobs (session ids, API secrets without a known prefix) */
   opaqueBlob: /\b[A-Za-z0-9_-]{32,}\b/,
-  /** Object keys that always mean "secret", regardless of the value's shape */
+  /** SCREAMING_SNAKE / snake_case object keys that always mean "secret" */
   sensitiveKeyName: /(_KEY|_SECRET|_TOKEN|_PK|_PASSWORD)$/i,
+  /** camelCase / any-case object keys that always mean "secret" */
+  sensitiveKeyNameCamel:
+    /(api[_-]?key|secret|token|password|passwd|private[_-]?key|mnemonic|seed|pk)$/i,
 } as const;
 
-// Non-global copies for single-shot .test() calls (avoids /g lastIndex statefulness).
-const RE_OPEN_ROUTER = new RegExp(REDACTION_PATTERNS.openRouterKey.source);
-const RE_GENERIC_SK = new RegExp(REDACTION_PATTERNS.genericSecretKey.source);
-const RE_PRIVATE_KEY = new RegExp(REDACTION_PATTERNS.privateKeyHex.source);
-const RE_JWT = new RegExp(REDACTION_PATTERNS.jwt.source);
+function toGlobal(re: RegExp): RegExp {
+  return new RegExp(re.source, `${re.flags}g`);
+}
+
+// Non-global copies for single-shot .test()/.replace() calls (avoids /g lastIndex bugs).
+const RE_OPEN_ROUTER = REDACTION_PATTERNS.openRouterKey;
+const RE_GENERIC_SK = REDACTION_PATTERNS.genericSecretKey;
+const RE_PRIVATE_KEY = REDACTION_PATTERNS.privateKeyHex;
+const RE_JWT = REDACTION_PATTERNS.jwt;
 
 // Global copies for .replace() sweeps over free-form strings.
-const RE_BEARER_G = new RegExp(REDACTION_PATTERNS.bearerToken.source, 'gi');
-const RE_OPEN_ROUTER_G = new RegExp(REDACTION_PATTERNS.openRouterKey.source, 'g');
-const RE_GENERIC_SK_G = new RegExp(REDACTION_PATTERNS.genericSecretKey.source, 'g');
-const RE_PRIVATE_KEY_G = new RegExp(REDACTION_PATTERNS.privateKeyHex.source, 'g');
-const RE_JWT_G = new RegExp(REDACTION_PATTERNS.jwt.source, 'g');
-const RE_OPAQUE_BLOB_G = new RegExp(REDACTION_PATTERNS.opaqueBlob.source, 'g');
+const RE_BEARER_G = toGlobal(REDACTION_PATTERNS.bearerToken);
+const RE_OPEN_ROUTER_G = toGlobal(REDACTION_PATTERNS.openRouterKey);
+const RE_GENERIC_SK_G = toGlobal(REDACTION_PATTERNS.genericSecretKey);
+const RE_PRIVATE_KEY_G = toGlobal(REDACTION_PATTERNS.privateKeyHex);
+const RE_JWT_G = toGlobal(REDACTION_PATTERNS.jwt);
+const RE_OPAQUE_BLOB_G = toGlobal(REDACTION_PATTERNS.opaqueBlob);
 
 // Shapes that must never be masked even though they satisfy the opaque-blob charset/length.
 const RE_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -104,37 +152,42 @@ function redactString(input: string): string {
   return out;
 }
 
-/** Masks a value found under a `..._KEY`/`..._SECRET`/etc. object key, whatever its shape. */
+/** Masks a value found under a sensitive-shaped object key, whatever its shape. */
 function maskWholeValue(value: unknown): unknown {
   if (typeof value === 'string') {
-    if (value.length === 0) return value;
-    return maskToken(value);
+    return value.length === 0 ? value : maskToken(value);
   }
   if (value === null || value === undefined) return value;
   return '[REDACTED]';
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null) return false;
-  if (Array.isArray(value)) return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+function isSensitiveKeyName(key: string): boolean {
+  return (
+    REDACTION_PATTERNS.sensitiveKeyName.test(key) ||
+    REDACTION_PATTERNS.sensitiveKeyNameCamel.test(key)
+  );
 }
 
-function redactObject(obj: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const key of Object.keys(obj)) {
-    const value = obj[key];
-    if (REDACTION_PATTERNS.sensitiveKeyName.test(key)) {
-      result[key] = maskWholeValue(value);
-    } else {
-      result[key] = redact(value);
-    }
-  }
-  return result;
+function isAllowedTxHashKey(key: string, options: RedactOptions): boolean {
+  const list = options.allowTxHashKeys;
+  if (!list || list.length === 0) return false;
+  const lowerKey = key.toLowerCase();
+  return list.some((allowed) => allowed.toLowerCase() === lowerKey);
 }
 
-function redactError(err: Error): Record<string, unknown> {
+function isBinaryLike(value: unknown): value is ArrayBuffer | ArrayBufferView {
+  return value instanceof ArrayBuffer || ArrayBuffer.isView(value);
+}
+
+function binaryByteLength(value: ArrayBuffer | ArrayBufferView): number {
+  return value.byteLength;
+}
+
+function redactError(
+  err: Error,
+  options: RedactOptions,
+  seen: WeakSet<object>,
+): Record<string, unknown> {
   const result: Record<string, unknown> = {
     name: err.name,
     message: redactString(err.message),
@@ -142,25 +195,88 @@ function redactError(err: Error): Record<string, unknown> {
   if (typeof err.stack === 'string') {
     result.stack = redactString(err.stack);
   }
-  const extraKeys = Object.keys(err).filter(
-    (k) => k !== 'name' && k !== 'message' && k !== 'stack',
-  );
-  for (const key of extraKeys) {
-    result[key] = redact((err as unknown as Record<string, unknown>)[key]);
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause !== undefined) {
+    result.cause = redact(cause, options, seen);
+  }
+  const alreadyHandled = new Set(['name', 'message', 'stack', 'cause']);
+  for (const key of Object.getOwnPropertyNames(err)) {
+    if (alreadyHandled.has(key)) continue;
+    result[key] = redact((err as unknown as Record<string, unknown>)[key], options, seen);
+  }
+  return result;
+}
+
+/** Walks a plain object literal or a class instance's own enumerable properties. */
+function redactContainer(
+  obj: Record<string, unknown>,
+  options: RedactOptions,
+  seen: WeakSet<object>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(obj)) {
+    const value = obj[key];
+    if (isAllowedTxHashKey(key, options)) {
+      result[key] = value;
+      continue;
+    }
+    if (isSensitiveKeyName(key)) {
+      result[key] = maskWholeValue(value);
+      continue;
+    }
+    result[key] = redact(value, options, seen);
   }
   return result;
 }
 
 /**
- * Deep-walks `value` (strings, arrays, plain objects, Error objects) and returns an
- * equivalent structure with every secret-shaped substring masked to `<prefix>…<last4>`.
- * Non-string primitives (numbers, booleans, null, undefined, bigint) and non-plain
- * objects (Date, RegExp, Map, Set, …) pass through unchanged.
+ * Deep-walks `value` and returns an equivalent, JSON-safe structure with every
+ * secret-shaped substring masked to `<prefix>…<last4>`. See the file header for the
+ * full rule set, the `allowTxHashKeys` escape hatch, and what happens to non-plain
+ * values (class instances, Map/Set, Buffer/TypedArray/ArrayBuffer, BigInt, Date,
+ * functions/symbols) and circular references. Never throws.
  */
-export function redact(value: unknown): unknown {
-  if (typeof value === 'string') return redactString(value);
-  if (Array.isArray(value)) return value.map((item) => redact(item));
-  if (value instanceof Error) return redactError(value);
-  if (isPlainObject(value)) return redactObject(value);
-  return value;
+export function redact(
+  value: unknown,
+  options: RedactOptions = {},
+  seen: WeakSet<object> = new WeakSet(),
+): unknown {
+  if (value === null || value === undefined) return value;
+
+  switch (typeof value) {
+    case 'string':
+      return redactString(value);
+    case 'bigint':
+      return value.toString();
+    case 'function':
+    case 'symbol':
+      return '<fn>';
+    case 'boolean':
+    case 'number':
+      return value;
+    default:
+      break;
+  }
+
+  // `value` is a non-null `object` from here on.
+  if (value instanceof Date) return value.toISOString();
+  if (isBinaryLike(value)) return `<bytes:${binaryByteLength(value)}>`;
+
+  if (seen.has(value)) return '<circular>';
+  seen.add(value);
+
+  if (value instanceof Error) return redactError(value, options, seen);
+  if (Array.isArray(value)) return value.map((item) => redact(item, options, seen));
+  if (value instanceof Map) {
+    return Array.from(value.entries()).map(([k, v]) => [
+      redact(k, options, seen),
+      redact(v, options, seen),
+    ]);
+  }
+  if (value instanceof Set) {
+    return Array.from(value.values()).map((v) => redact(v, options, seen));
+  }
+
+  // Anything else that's still an object: a plain object literal or a class instance.
+  return redactContainer(value as Record<string, unknown>, options, seen);
 }

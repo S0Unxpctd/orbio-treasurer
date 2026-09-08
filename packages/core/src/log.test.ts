@@ -98,6 +98,98 @@ describe('log()', () => {
   });
 });
 
+// --- Adversarial inputs from tasks/reports/T-003-audit-1.md (pass 1) ---
+describe('log() — adversarial cases from audit pass 1', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    delete process.env.LOG_LEVEL;
+  });
+
+  afterEach(() => {
+    errorSpy.mockRestore();
+  });
+
+  it('redacts a secret interpolated straight into msg (Blocker: msg was never redacted)', () => {
+    log('info', `created key ${FIXTURE_SECRET} for agent a1`);
+    const raw = errorSpy.mock.calls[0]?.[0] as string;
+    expect(raw).not.toContain(FIXTURE_SECRET);
+    const parsed = JSON.parse(raw);
+    expect(parsed.msg).toBe('created key sk-or-…1234 for agent a1');
+  });
+
+  it('never throws on a circular ctx — degrades to a <circular> marker, not a crash', () => {
+    const circular: Record<string, unknown> = { agent: 'a1' };
+    circular.self = circular;
+    expect(() => log('error', 'circular test', circular)).not.toThrow();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(errorSpy.mock.calls[0]?.[0] as string);
+    expect(parsed.self).toBe('<circular>');
+  });
+
+  it('never throws on a BigInt in ctx — stringifies it instead', () => {
+    expect(() =>
+      log('info', 'balance check', { balanceWei: 123456789012345678901234567890n }),
+    ).not.toThrow();
+    const parsed = JSON.parse(errorSpy.mock.calls[0]?.[0] as string);
+    expect(parsed.balanceWei).toBe('123456789012345678901234567890');
+  });
+
+  it('falls back to a safe log-serialization-failed line if redact()+stringify still fails', () => {
+    // A getter that throws defeats redact()'s own property walk; log() must still not throw
+    // and must still emit exactly one valid JSON line to stderr.
+    const poison: Record<string, unknown> = {};
+    Object.defineProperty(poison, 'boom', {
+      enumerable: true,
+      get(): never {
+        throw new Error('getter exploded');
+      },
+    });
+    expect(() => log('error', 'poisoned ctx', poison)).not.toThrow();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const parsed = JSON.parse(errorSpy.mock.calls[0]?.[0] as string);
+    expect(parsed.msg).toBe('log-serialization-failed');
+    expect(parsed.level).toBe('error');
+  });
+
+  it('a fixture secret in a class-instance ctx value does not survive a real log() call', () => {
+    class WalletKeyHolder {
+      constructor(public privateKey: string) {}
+    }
+    log('error', 'signing failed', { wallet: new WalletKeyHolder(FIXTURE_SECRET) });
+    const raw = errorSpy.mock.calls[0]?.[0] as string;
+    expect(raw).not.toContain(FIXTURE_SECRET);
+  });
+
+  it('a Buffer holding a fixture secret in ctx never emits raw bytes via log()', () => {
+    const buf = Buffer.from(FIXTURE_SECRET);
+    log('error', 'wallet op', { keyBytes: buf });
+    const raw = errorSpy.mock.calls[0]?.[0] as string;
+    expect(raw).not.toContain(FIXTURE_SECRET.slice(6, -4));
+    expect(raw).toContain(`<bytes:${buf.byteLength}>`);
+  });
+
+  it('a mixed-case key in ctx is still masked (Blocker: case-sensitive patterns)', () => {
+    log('info', 'upstream response', { rawHeader: 'SK-OR-V1-TESTONLYabcdef1234' });
+    const raw = errorSpy.mock.calls[0]?.[0] as string;
+    expect(raw).not.toContain('TESTONLYabcdef1234');
+  });
+
+  it('a camelCase apiKey field in ctx is masked', () => {
+    log('info', 'client created', { apiKey: 'short-secret-value-1234' });
+    const raw = errorSpy.mock.calls[0]?.[0] as string;
+    expect(raw).not.toContain('short-secret-value-1234');
+  });
+
+  it('a txHash-keyed value is left intact by default (log.ts uses the allow-list)', () => {
+    const hash = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+    log('info', 'stake tx confirmed', { txHash: hash });
+    const parsed = JSON.parse(errorSpy.mock.calls[0]?.[0] as string);
+    expect(parsed.txHash).toBe(hash);
+  });
+});
+
 describe('createLogger()', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
 
