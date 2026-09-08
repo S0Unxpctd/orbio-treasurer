@@ -9,7 +9,7 @@ describe('loadEnv — defaults', () => {
     expect(env.BOOK_CLIENT).toBe('readonly');
     expect(env.STAKE_CLIENT).toBe('none');
     expect(env.TREASURER_LIVE).toBe(false);
-    expect(env.RH_CHAIN_ID).toBe('4663');
+    expect(env.RH_CHAIN_ID).toBe(4663);
     expect(env.ORBIO_MCP_URL).toBe('https://www.orbio.so/api/mcp');
   });
 
@@ -23,6 +23,10 @@ describe('loadEnv — defaults', () => {
 
   it('parses TREASURER_LIVE=false explicitly', () => {
     expect(loadEnv({ TREASURER_LIVE: 'false' }).TREASURER_LIVE).toBe(false);
+  });
+
+  it('coerces RH_CHAIN_ID to a number', () => {
+    expect(loadEnv({ RH_CHAIN_ID: '11155111' }).RH_CHAIN_ID).toBe(11155111);
   });
 });
 

@@ -167,6 +167,19 @@ describeOrSkip('postgres ledger schema (TEST_DATABASE_URL set)', () => {
         /append-only/i,
       );
     });
+
+    it('key_meta (PRD 0.3.1, FR-1.1 — revocation is a new row, never an update)', async () => {
+      const agentId = await insertAgent({ slug: 'km-agent' });
+      const rows = await sql`
+        insert into key_meta (agent_id, key_prefix, key_last4) values (${agentId}, 'sk-or', '1234')
+        returning id
+      `;
+      const id = rows[0]?.id as string;
+      await expect(sql`update key_meta set revoked_at = now() where id = ${id}`).rejects.toThrow(
+        /append-only/i,
+      );
+      await expect(sql`delete from key_meta where id = ${id}`).rejects.toThrow(/append-only/i);
+    });
   });
 
   describe('orders: only status/filled_usd/fee_usd/resolved_at/external_id are mutable', () => {
@@ -193,6 +206,44 @@ describeOrSkip('postgres ledger schema (TEST_DATABASE_URL set)', () => {
       const id = rows[0]?.id as string;
       await expect(sql`update orders set usd = 999 where id = ${id}`).rejects.toThrow(
         /only status, filled_usd, fee_usd, resolved_at, external_id may be updated/,
+      );
+    });
+
+    it('rejects DELETE (parity with the SQLite suite — audit pass 1 F3)', async () => {
+      const agentId = await insertAgent({ slug: 'ord-agent-3' });
+      const decisionId = await insertDecision(agentId);
+      const rows = await sql`
+        insert into orders (agent_id, decision_id, side, usd, status, placed_at)
+        values (${agentId}, ${decisionId}, 'buy', 10, 'pending', now()) returning id
+      `;
+      const id = rows[0]?.id as string;
+      await expect(sql`delete from orders where id = ${id}`).rejects.toThrow(
+        /orders rows cannot be deleted/,
+      );
+    });
+  });
+
+  describe('agents: mutable-column guard (parity with the SQLite suite — audit pass 1 F3)', () => {
+    it('allows updating a display field and last_seen_at', async () => {
+      const agentId = await insertAgent({ slug: 'agents-guard-1' });
+      await expect(
+        sql`update agents set name = 'Renamed Agent', last_seen_at = now() where id = ${agentId}`,
+      ).resolves.toBeDefined();
+      const rows = await sql`select name from agents where id = ${agentId}`;
+      expect(rows[0]?.name).toBe('Renamed Agent');
+    });
+
+    it('rejects updating an immutable column (e.g. mode)', async () => {
+      const agentId = await insertAgent({ slug: 'agents-guard-2' });
+      await expect(sql`update agents set mode = 'live' where id = ${agentId}`).rejects.toThrow(
+        /only name, repo_url, x_handle, template, last_seen_at may be updated/,
+      );
+    });
+
+    it('rejects DELETE', async () => {
+      const agentId = await insertAgent({ slug: 'agents-guard-3' });
+      await expect(sql`delete from agents where id = ${agentId}`).rejects.toThrow(
+        /agents rows cannot be deleted/,
       );
     });
   });

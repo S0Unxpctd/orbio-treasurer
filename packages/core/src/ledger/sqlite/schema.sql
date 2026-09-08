@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS agents (
   last_seen_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
--- Metadata about Orbio keys the agent has held — never the key itself. PRD §9.
+-- Metadata about Orbio keys the agent has held — never the key itself. Append-only: revocation is a new row with revoked_at, never an update (PRD 0.3.1, FR-1.1). PRD §9.
 CREATE TABLE IF NOT EXISTS key_meta (
   id TEXT PRIMARY KEY NOT NULL,
   agent_id TEXT NOT NULL REFERENCES agents(id),
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS book_snapshots (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_book_snapshots_at_desc ON book_snapshots (at DESC);
--- status (and a few settlement fields) is the only mutable data. PRD §9.
+-- Mutable only via the executor, and only the fill fields: status, filled_usd, fee_usd, resolved_at, external_id (PRD 0.3.1: fills arrive after placement; everything else immutable). PRD §9.
 CREATE TABLE IF NOT EXISTS orders (
   id TEXT PRIMARY KEY NOT NULL,
   agent_id TEXT NOT NULL REFERENCES agents(id),
@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS orders (
   resolved_at TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+CREATE INDEX IF NOT EXISTS idx_orders_agent_id_placed_at_desc ON orders (agent_id, placed_at DESC);
 
 -- Append-only / mutable-column-guard triggers.
 
@@ -147,6 +148,18 @@ WHEN (
 )
 BEGIN
   SELECT RAISE(ABORT, 'agents: only name, repo_url, x_handle, template, last_seen_at may be updated');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_key_meta_no_update
+BEFORE UPDATE ON key_meta
+BEGIN
+  SELECT RAISE(ABORT, 'key_meta is append-only: UPDATE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_key_meta_no_delete
+BEFORE DELETE ON key_meta
+BEGIN
+  SELECT RAISE(ABORT, 'key_meta is append-only: DELETE is not permitted');
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_treasury_snapshots_no_update

@@ -65,13 +65,14 @@ export interface IndexDef {
 /**
  * How writes to this table are constrained after insert.
  *   - 'append-only': UPDATE and DELETE are always rejected (treasury_snapshots, usage_events,
- *     decisions, book_snapshots — the four tables named in FR-1.1 / T-002's "In scope").
+ *     decisions, book_snapshots, and — as of PRD 0.3.1 / FR-1.1 — key_meta: key revocation is
+ *     modelled as inserting a new key_meta row carrying `revoked_at`, never updating one in
+ *     place; see tasks/T-002.md Discovered / audit pass 1 F2).
  *   - 'mutable-guard': DELETE is always rejected; UPDATE is rejected unless every changed
  *     column is in `mutableColumns` (agents, orders).
- *   - 'none': no ledger trigger is generated for this table (key_meta — see Discovered in
- *     tasks/T-002.md: FR-1.1 reads as if key_meta should also never be updated, but the
- *     ticket's concrete guidance names only the four tables above plus orders/agents, so no
- *     trigger is generated here; flagged for the auditor).
+ *   - 'none': no ledger trigger is generated for this table. Unused today — every table is
+ *     either append-only or mutable-guarded — kept for a future table that genuinely has no
+ *     write constraint.
  */
 export type WritePolicy =
   | { readonly kind: 'append-only' }
@@ -176,7 +177,9 @@ export const LEDGER_SCHEMA: readonly TableDef[] = [
   },
   {
     name: 'key_meta',
-    comment: 'Metadata about Orbio keys the agent has held — never the key itself. PRD §9.',
+    comment:
+      'Metadata about Orbio keys the agent has held — never the key itself. Append-only: ' +
+      'revocation is a new row with revoked_at, never an update (PRD 0.3.1, FR-1.1). PRD §9.',
     columns: [
       fk('agent_id', 'agents'),
       text('key_prefix', { notNull: true }),
@@ -184,7 +187,7 @@ export const LEDGER_SCHEMA: readonly TableDef[] = [
       timestamp('revoked_at'),
       text('reason'),
     ],
-    writePolicy: { kind: 'none' },
+    writePolicy: { kind: 'append-only' },
     rls: { kind: 'none' },
   },
   {
@@ -275,7 +278,10 @@ export const LEDGER_SCHEMA: readonly TableDef[] = [
   },
   {
     name: 'orders',
-    comment: 'status (and a few settlement fields) is the only mutable data. PRD §9.',
+    comment:
+      'Mutable only via the executor, and only the fill fields: status, filled_usd, fee_usd, ' +
+      'resolved_at, external_id (PRD 0.3.1: fills arrive after placement; everything else ' +
+      'immutable). PRD §9.',
     columns: [
       fk('agent_id', 'agents'),
       fk('decision_id', 'decisions'),
@@ -292,6 +298,7 @@ export const LEDGER_SCHEMA: readonly TableDef[] = [
       timestamp('placed_at', { notNull: true }),
       timestamp('resolved_at'),
     ],
+    indexes: [{ columns: ['agent_id', 'placed_at desc'] }],
     writePolicy: {
       kind: 'mutable-guard',
       mutableColumns: ['status', 'filled_usd', 'fee_usd', 'resolved_at', 'external_id'],

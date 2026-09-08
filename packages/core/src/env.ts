@@ -38,7 +38,7 @@ const baseSchema = z.object({
 
   STAKE_CLIENT: z.enum(STAKE_CLIENT_VALUES).default('none'),
   RH_RPC_URL: optionalString,
-  RH_CHAIN_ID: z.string().min(1).default('4663'),
+  RH_CHAIN_ID: z.coerce.number().int().positive().default(4663),
   UNISWAP_ROUTER: optionalString,
   UNISWAP_QUOTER: optionalString,
   ORBIO_TOKEN: optionalString,

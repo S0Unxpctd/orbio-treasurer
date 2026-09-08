@@ -35,6 +35,10 @@ create trigger trg_agents_guard
 before update or delete on agents
 for each row execute function agents_guard_write();
 
+create trigger trg_key_meta_append_only
+before update or delete on key_meta
+for each row execute function ledger_reject_write();
+
 create trigger trg_treasury_snapshots_append_only
 before update or delete on treasury_snapshots
 for each row execute function ledger_reject_write();

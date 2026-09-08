@@ -59,6 +59,14 @@ function insertDecision(agentId: string): string {
   return id;
 }
 
+function insertKeyMeta(agentId: string): string {
+  const id = randomUUID();
+  db.prepare(
+    `insert into key_meta (id, agent_id, key_prefix, key_last4) values (?, ?, 'sk-or', '1234')`,
+  ).run(id, agentId);
+  return id;
+}
+
 describe('sqlite ledger schema — applies cleanly (AC1)', () => {
   it('applies to an empty file with no errors', () => {
     expect(() => applySchema()).not.toThrow();
@@ -91,6 +99,7 @@ describe('sqlite ledger schema — append-only tables (AC2, FR-1.1)', () => {
     'usage_events',
     'decisions',
     'book_snapshots',
+    'key_meta',
   ] as const;
 
   beforeEach(() => applySchema());
@@ -119,7 +128,7 @@ describe('sqlite ledger schema — append-only tables (AC2, FR-1.1)', () => {
       expect(() =>
         db.prepare('update decisions set type = ? where id = ?').run('ALERT', id),
       ).toThrow(/append-only/i);
-    } else {
+    } else if (table === 'book_snapshots') {
       id = randomUUID();
       db.prepare(`insert into book_snapshots (id, at, source) values (?, ?, ?)`).run(
         id,
@@ -128,6 +137,14 @@ describe('sqlite ledger schema — append-only tables (AC2, FR-1.1)', () => {
       );
       expect(() =>
         db.prepare("update book_snapshots set source = 'page' where id = ?").run(id),
+      ).toThrow(/append-only/i);
+    } else {
+      // key_meta: revocation is a new row with revoked_at, never an update (PRD 0.3.1, FR-1.1).
+      id = insertKeyMeta(agentId);
+      expect(() =>
+        db
+          .prepare('update key_meta set revoked_at = ? where id = ?')
+          .run(new Date().toISOString(), id),
       ).toThrow(/append-only/i);
     }
   });
@@ -147,13 +164,15 @@ describe('sqlite ledger schema — append-only tables (AC2, FR-1.1)', () => {
       ).run(id, agentId, new Date().toISOString(), 'gpt', 'ok');
     } else if (table === 'decisions') {
       id = insertDecision(agentId);
-    } else {
+    } else if (table === 'book_snapshots') {
       id = randomUUID();
       db.prepare(`insert into book_snapshots (id, at, source) values (?, ?, ?)`).run(
         id,
         new Date().toISOString(),
         'api',
       );
+    } else {
+      id = insertKeyMeta(agentId);
     }
     expect(() => db.prepare(`delete from ${table} where id = ?`).run(id)).toThrow(/append-only/i);
   });

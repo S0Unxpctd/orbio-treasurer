@@ -24,7 +24,7 @@ create table if not exists agents (
   created_at timestamptz not null default now()
 );
 
--- Metadata about Orbio keys the agent has held — never the key itself. PRD §9.
+-- Metadata about Orbio keys the agent has held — never the key itself. Append-only: revocation is a new row with revoked_at, never an update (PRD 0.3.1, FR-1.1). PRD §9.
 create table if not exists key_meta (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid not null references agents(id),
@@ -111,7 +111,7 @@ create table if not exists book_snapshots (
 );
 create index if not exists idx_book_snapshots_at_desc on book_snapshots (at desc);
 
--- status (and a few settlement fields) is the only mutable data. PRD §9.
+-- Mutable only via the executor, and only the fill fields: status, filled_usd, fee_usd, resolved_at, external_id (PRD 0.3.1: fills arrive after placement; everything else immutable). PRD §9.
 create table if not exists orders (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid not null references agents(id),
@@ -130,3 +130,4 @@ create table if not exists orders (
   resolved_at timestamptz,
   created_at timestamptz not null default now()
 );
+create index if not exists idx_orders_agent_id_placed_at_desc on orders (agent_id, placed_at desc);
