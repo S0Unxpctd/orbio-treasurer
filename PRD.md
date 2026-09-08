@@ -145,6 +145,8 @@ Requirement IDs (`FR-x.y`) are referenced by tickets in `tasks/`. Each has accep
 - **FR-4.6 (Must)** Every decision row stores: type, state before/after, the rule id that fired, the numeric inputs, the action payload, execution result, and a one-line human string rendered from a template (not an LLM).
   AC: a decision can be fully re-derived from its stored inputs by re-running `evaluate`.
 - **FR-4.7 (Should)** Hysteresis: a state change requires two consecutive ticks in the new state, except into `DEFICIT`, which is immediate.
+- **FR-4.8 (Should) Predictive prebuy for recurring workloads.** The agent's burn is often periodic (a cron: same job, same hour). Policy input `forecast_usd_next_window` is derived either from a declared schedule in `treasurer.config.ts` (`workloads: [{cron, est_usd_per_run}]`) or, absent that, from the trailing 7-day hourly profile (same-hour median). Rule `R-PREBUY-1`: if `forecast_usd_next_window > credits_available − reserve` **and** `book.best_discount ≥ prebuy_min_discount` (default 25%), emit `BUY_CREDIT` for the shortfall (capped by `max_buy_usd_per_day`) *before* the window, even in `COMFORTABLE`. This is procurement, not rescue: buy when it's cheap and needed soon, not when it's late. Falls back to `SIGNAL_FUND` when `buy` is unavailable, with the amount and the deadline ("$14 before Monday 06:00") in the sentence.
+  AC: table tests with a declared cron and with an inferred profile; no prebuy when discount < threshold; no prebuy when credits already cover the window; amount = shortfall, never more.
 
 ### 8.5 Book adapter
 
@@ -162,6 +164,8 @@ Requirement IDs (`FR-x.y`) are referenced by tickets in `tasks/`. Each has accep
 - **FR-6.2 (Must)** `GET /embed/:slug` renders the status card as a standalone page suitable for an iframe (light/dark aware, ≤ 400×220 default). `GET /badge/:slug.svg` renders a shields-style badge: `self-funded · 91% covered · runway 12d`.
 - **FR-6.3 (Must)** Every figure that has a source links to it: wallet → Blockscout, balance → Orbio dashboard, orders → book, decision → decision detail page.
 - **FR-6.4 (Should)** `GET /api/agents/:slug/decisions?since=` and `/snapshots?since=` for anyone who wants to chart it.
+- **FR-6.5 (Must) Measured savings, never promised.** From `usage_events` (list price at OpenRouter rates vs. price actually paid, per call) the API and widget expose: `cost_per_run_usd` (per declared workload, if any), `savings_vs_list_pct_30d` split into *discount* (credit bought or earned below list) and *routing* (cheaper tier served), and `paid_usd_30d`. The landing shows the network-wide median. **No savings figure appears anywhere until the ledger has ≥ 7 days of data for that agent**; before that the widget shows "measuring".
+  AC: savings math table-tested (all-list = 0%, all-holder-credit = 100% discount share, mixed cases); the 7-day gate is enforced in the API, not just the UI.
 
 ### 8.7 Starter kit: `create-orbio-agent`
 
@@ -351,6 +355,7 @@ Every external dependency gets a **30-minute probe ticket on day 1**, before any
 2. **Are the $100 of hackathon inference on a separate key/balance from holder credits?** Still open. Until answered, the demo's coverage excludes any balance flagged as grant.
 3. **Is there a read endpoint for the book (or may we use the page's JSON endpoint)?** Asked 2026-09-08. Gates L1 (probe P-3).
 4. **Is listing holder surplus agentic today?** Asked 2026-09-08. Out of scope either way this week; informs the roadmap section on the landing.
+6. **Which rail for agentic buying?** Proposal to Yash in §18: Whop off-session charges for card users now, x402 with USDG on Robinhood Chain for wallets. Offer to build the buyer side and a reference facilitator config (T-052, conditional on his interest).
 5. **Is there, or could there be, an API to list a credit-limited OpenRouter key on the book?** (OpenRouter's provisioning API can mint such keys programmatically; the listing step is the missing agentic leg.) To ask. Gates the v2 sell side (§17), not this week.
 
 ## 15. Timeline and cut list (deadline 2026-09-20)
@@ -393,3 +398,17 @@ Written so this week's choices don't close it. The generic product is a **cross-
 What this week must leave in place for that: the `balance_source` abstraction (already there), the `LedgerStore` seam (already there), `list()` in `BookClient` as a declared capability (FR-5.1), the metering middleware being provider-agnostic (it is: any AI SDK provider), and no Orbio-specific assumption inside `policy/`.
 
 Monetisation candidates for that product, in order of realism: hosted Treasurer (we run the tick, history, alerts, widget), a share of measured savings, and a take rate on credit sold and on x402 revenue an agent earns. None of this is built or priced this week.
+
+## 18. Breaking the wall: how buying becomes agentic (analysis, 2026-09-08)
+
+The wall is the Whop checkout page. Three ways through it, none of which we can build alone; all three we can build *for*.
+
+**A. Whop off-session charge (card).** Whop's API charges a stored payment method without a checkout UI ("charge an existing member off-session using a stored payment method": `create payment` with `member_id` + `payment_method_id`). The buyer saves a card once through a setup-mode checkout; Orbio stores the `payment_method_id`; Orbio exposes `POST /buy {usd}` that charges via Whop and credits the balance. Agentic after a one-time human step; Whop handles fraud and identity; fits the founder's retail-card-paying population exactly. Cost: Whop fees, fiat only, crypto not documented as a savable method. Almost certainly the fastest thing Yash can ship, and possibly what "this week" means. Our side: `OrbioAgenticBuyClient.buy()` calls that endpoint. Nothing else.
+
+**B. x402 with USDG on Robinhood Chain (wallet).** Technically clean and on Orbio's own rail. x402 supports "any EVM chain" (`eip155:<chainId>`, Robinhood Chain = 4663) and "any ERC-20 token" via EIP-3009 or Permit2. **USDG implements EIP-3009** (`transferWithAuthorization`, Paxos contract), the preferred gasless path: the agent signs an authorization, no approval transaction, no gas on the buyer side. Sellers are already paid in USDG on this chain, so buyer USDG in → seller USDG out, Orbio never touches fiat. The catch: no public facilitator serves Robinhood Chain, so Orbio must **self-facilitate**: run a small service (open-source implementations exist: x402-rs, Fireblocks' facilitator, Coinbase's reference) with an RPC to the chain and a hot wallet holding a little gas, that verifies the EIP-712 signature and submits `transferWithAuthorization` on settlement. Then add x402 middleware to `POST /credits/buy`, price the 402 dynamically from the requested amount and current book discount, and on settlement credit the balance and fill the order. Rough effort for Orbio: a few dev-days with an existing facilitator; our side: one ticket, the Treasurer already plans a USDG reserve in the agent wallet (for stake-up), so the same key signs both.
+
+**C. Plain on-chain deposit.** Agent sends USDG to a per-agent deposit address; an indexer credits the balance. Simplest, no protocol; but no request-level binding, reconciliation and refunds are manual. x402 is this, standardized.
+
+**Recommendation to propose:** two rails, A for cards now, B for wallets next; the Treasurer supports both behind `BookClient.buy()`. What we offer Orbio: the buyer-side x402 client in the kit, a tested reference facilitator configuration for Robinhood Chain + USDG, and a live agent that exercises it. What we ask: the endpoint spec early enough to integrate before Sept 18.
+
+Verify before proposing B: the USDG contract on Robinhood Chain is the Paxos EIP-3009 implementation (check the deployed address against Paxos docs); Robinhood Chain RPC availability for a facilitator; gas token and cost per settlement.

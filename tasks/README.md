@@ -50,6 +50,7 @@ Tickets follow `PROCESS.md`. Status lives inside each ticket; this table is upda
 | [T-050](T-050.md) | Multi-key balances: keys[] config, KeyBalance sources, key_balances table | 8 | Sept 16 | W2 | 4h | P-009, T-017 | todo |
 | **D9 — portfolio view + key-aware routing · onboarding campaign** | | | Sept 17 | | | | |
 | [T-051](T-051.md) | Consolidated portfolio view (widget line + agent page table) + key-aware routing Orbio↔OpenRouter | 9 | Sept 17 | W2 | 4h | T-050, T-019, T-031 | todo |
+| [T-052](T-052.md) | x402 buyer-side spike + RH-chain facilitator reference (conditional on Yash) | 9 | Sept 17 | L2b | 4h | T-018, T-021 | todo |
 | [T-060](T-060.md) | Onboarding campaign for new participants (target 3–5 external agents) | 9 | Sept 17 | W2 | 3h (So-heavy) | T-026, T-027, T-022 | todo |
 | **D10 — FEATURE FREEZE 18:00 · hardening** | | | Sept 18 | | | | |
 | [T-061](T-061.md) | Feature freeze + hardening pass | 10 | Sept 18 | W2 | 3h | T-051, T-060 | todo |
