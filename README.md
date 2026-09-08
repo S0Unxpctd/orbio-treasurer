@@ -2,7 +2,7 @@
 
 **Give any AI agent a treasury that funds its own inference from a $ORBIO position, and prove it in public.**
 
-Built for Orbio Build Week (September 2026). Status: docs v0.2, build starts with T-001. See `STATUS.md`.
+Built for Orbio Build Week (September 2026). Status: see `STATUS.md` and `docs/HANDOFF.md`.
 
 - `PRD.md` — what we build and why (source of truth)
 - `ARCHITECTURE.md` — how, stack locked
