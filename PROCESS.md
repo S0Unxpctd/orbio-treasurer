@@ -108,7 +108,7 @@ Every audit answers each line explicitly.
 - Is there any path where `BUY_CREDIT` or `STAKE_UP` executes in `dry_run`? In `live` without `TREASURER_LIVE=true`? Without 24h history? Without the round-trip evidence and So's `ok live` in the ticket?
 - Can `max_buy_usd_per_day`, `max_stake_usd_per_day` or `max_spend_usd_per_day` be exceeded by concurrency, retries, or a tick running twice?
 - Stake-up: slippage guard applied to the *quote*, `minOrbioOut` passed to the swap, stable reserve respected, one swap per tick max, wallet private key only read from env?
-- Are order states mutable only via the executor, and only `status`?
+- Are orders mutable only via the executor, and only the fill fields (`status`, `filled_usd`, `fee_usd`, `resolved_at`, `external_id`)? Is `key_meta` append-only?
 
 **Secrets**
 - Grep the diff for key/token material in logs, errors, DB writes, API responses, test fixtures. Is `redact()` used everywhere a secret could appear?

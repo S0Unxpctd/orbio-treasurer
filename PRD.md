@@ -100,7 +100,7 @@ Requirement IDs (`FR-x.y`) are referenced by tickets in `tasks/`. Each has accep
 
 - **FR-1.0 (Must)** The ledger is behind a `LedgerStore` interface with two implementations: `SqliteLedger` (default for kit agents; single file, zero setup, `better-sqlite3`) and `PostgresLedger` (Supabase; used by the hosted reference agent and the landing). Same schema, same append-only guarantees, same tests run against both.
   AC: the whole `core` test suite passes against both stores; a kit agent runs with no `SUPABASE_*` env var.
-- **FR-1.1 (Must)** The ledger is append-only. Tables: `agents`, `treasury_snapshots`, `usage_events`, `decisions`, `book_snapshots`, `orders`, `key_meta`. Schema in §9. No row is ever updated except `agents.display_*` fields and `orders.status`.
+- **FR-1.1 (Must)** The ledger is append-only. Tables: `agents`, `treasury_snapshots`, `usage_events`, `decisions`, `book_snapshots`, `orders`, `key_meta`. Schema in §9. No row is ever updated except `agents` display fields (`name`, `repo_url`, `x_handle`, `template`, `last_seen_at`) and the `orders` fill fields (`status`, `filled_usd`, `fee_usd`, `resolved_at`, `external_id`). `key_meta` is append-only like the four event tables (revocation is a new row with `revoked_at`, not an update).
   AC: attempting to update a `decisions` or `treasury_snapshots` row fails at the store level (trigger in Postgres; guarded repository + trigger in SQLite).
 - **FR-1.2 (Must)** Every hour (and on demand), a snapshot records: `credits_available_usd`, `credits_accrued_since_last_usd`, `key_spent_usd`, `key_remaining_usd`, `orbio_balance_tokens`, `orbio_price_usd` (best effort), `burn_rate_usd_per_day` (§8.3), `runway_days`, `coverage_ratio`.
   AC: 24 consecutive hourly snapshots exist for the reference agent with no gaps > 90 min.
@@ -245,7 +245,7 @@ decisions                       -- append-only
 book_snapshots                  -- append-only
   at timestamptz, source text ('api'|'page'), view jsonb, total_available_usd, best_discount_pct
 
-orders                          -- status is the only mutable column
+orders                          -- mutable only via the executor, and only the fill fields: status, filled_usd, fee_usd, resolved_at, external_id (PRD 0.3.1: fills arrive after placement; everything else immutable)
   agent_id fk, decision_id fk, side text ('buy'|'stake'), model text null, usd, discount_pct null,
   external_id text (order id or tx hash), status text, filled_usd, fee_usd, orbio_out numeric(30,0) null,
   price_impact_pct null, placed_at, resolved_at
