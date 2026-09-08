@@ -14,7 +14,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { log } from './log.js';
-import { redact } from './redact.js';
+import { DEFAULT_ALLOW_TX_HASH_KEYS, redact } from './redact.js';
 
 // Fake / well-known test-only secrets — never real credentials.
 const OR_KEY = 'sk-or-v1-TESTONLYabcdef1234';
@@ -206,6 +206,53 @@ describe('T-003 tester — robustness budget', () => {
       const elapsed = performance.now() - start;
       expect(raw()).not.toContain(OR_KEY);
       expect(elapsed).toBeLessThan(200);
+    });
+  });
+});
+
+describe('T-003 tester — Pass 2: tx-hash allow-list regression (commit 5d695b8)', () => {
+  it("'hash' is no longer on the default allow-list", () => {
+    expect(DEFAULT_ALLOW_TX_HASH_KEYS as readonly string[]).not.toContain('hash');
+  });
+
+  it('a private key under the generic `hash` key is masked, not exempted, via log()', () => {
+    withStderrSpy((raw) => {
+      log('error', 'suspicious hash field', { hash: HARDHAT_PK });
+      const text = raw();
+      expect(text).not.toContain(HARDHAT_PK);
+      const parsed = JSON.parse(text);
+      expect(parsed.hash).not.toBe(HARDHAT_PK);
+    });
+  });
+
+  it('a private key nested under `txHash` (not a bare string) is masked, not blanket-exempted, via log()', () => {
+    // isExemptTxHashValue only fires when the value AT that key is itself a bare
+    // 0x64-hex string — an object value must still be recursed into and its own
+    // sensitive fields masked normally.
+    withStderrSpy((raw) => {
+      log('error', 'tx wrapper', { txHash: { privateKey: HARDHAT_PK } });
+      const text = raw();
+      expect(text).not.toContain(HARDHAT_PK);
+      const parsed = JSON.parse(text);
+      expect(parsed.txHash.privateKey).not.toBe(HARDHAT_PK);
+    });
+  });
+
+  it('{ hash: { apiKey: ... } } is masked — recursion happens even under a hash-shaped key name', () => {
+    withStderrSpy((raw) => {
+      log('error', 'nested under hash', { hash: { apiKey: OR_KEY } });
+      const text = raw();
+      expect(text).not.toContain(OR_KEY);
+      const parsed = JSON.parse(text);
+      expect(parsed.hash.apiKey).not.toBe(OR_KEY);
+    });
+  });
+
+  it('a real tx-hash-shaped bare string under `txHash` still stays intact through log() (positive case preserved)', () => {
+    withStderrSpy((raw) => {
+      log('info', 'stake confirmed', { txHash: HARDHAT_PK });
+      const parsed = JSON.parse(raw());
+      expect(parsed.txHash).toBe(HARDHAT_PK);
     });
   });
 });
