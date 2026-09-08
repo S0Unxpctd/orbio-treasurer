@@ -101,9 +101,10 @@ Everything uncertain sits behind an interface; the policy engine imports none of
 export interface LedgerStore { /* insert-only repos + orders.status; same for sqlite and postgres */ }
 
 export interface BookClient {
-  readonly capabilities: { read: 'api' | 'json' | 'none'; write: boolean };
+  readonly capabilities: { read: 'api' | 'json' | 'none'; buy: boolean; list: boolean };
   getBook(): Promise<BookView | null>;
-  buy(req: BuyRequest): Promise<OrderResult>;     // throws NotSupported if !write
+  buy(req: BuyRequest): Promise<OrderResult>;     // throws NotSupported if !buy
+  list(req: ListRequest): Promise<OrderResult>;   // throws NotSupported if !list — reserved for v2 (cross-venue selling); no implementation this week
 }
 
 export interface StakeClient {

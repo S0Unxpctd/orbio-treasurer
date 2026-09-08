@@ -17,6 +17,7 @@ Everything learned about Orbio's real interfaces, appended as learned, with date
 2. Is the $100 grant on a separate key/balance from holder credits? (asked 2026-09-07)
 3. Read endpoint for the book, or may we use the page's JSON endpoint? (asked 2026-09-08, gates probe P-3)
 4. Is listing holder surplus agentic today? (asked 2026-09-08)
+5. Is there (or could there be) an API to list a credit-limited OpenRouter key on the book? OpenRouter provisioning keys make the key side agentic; the listing side is the gap. (to ask — v2 sell side)
 
 ## Probe results (PRD §13a)
 

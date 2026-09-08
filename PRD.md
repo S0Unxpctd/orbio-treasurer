@@ -146,7 +146,7 @@ Requirement IDs (`FR-x.y`) are referenced by tickets in `tasks/`. Each has accep
 
 ### 8.5 Book adapter
 
-- **FR-5.1 (Must)** Interface `BookClient` with `getBook(): BookView`, and, behind a `capabilities.write` flag, `buy(req): OrderResult`. Two implementations:
+- **FR-5.1 (Must)** Interface `BookClient` with `getBook(): BookView`, and, behind `capabilities.buy` / `capabilities.list` flags, `buy(req)` and `list(req)`. `list()` is reserved: declared in the interface so the policy can emit `LIST_CREDIT` decisions (rendered as `SIGNAL_LIST` with a deep link to the seller form while no API exists), **no implementation this week** (§4 non-goals; §17). Two implementations:
   - `ReadOnlyBookClient` — reads via the official read endpoint if Orbio provides one, else via the observed JSON endpoint behind the public page (fixtures recorded and dated; parser isolated). `buy()` throws `NotSupported`; executors convert `BUY_CREDIT` into `SIGNAL_FUND` with a **deep link** to the Whop checkout for the exact listing and a copy-ready summary.
   - `OrbioAgenticBuyClient` (L2b) — implements `buy()` against Orbio's agentic-buy endpoint the day it ships. Until then: interface, Zod schemas drafted from what Yash describes, and contract tests against a local mock so integration is a one-day ticket.
   AC: the policy engine and executors have zero knowledge of which implementation is active; swapping is one env var (`BOOK_CLIENT=readonly|orbio`).
@@ -337,6 +337,7 @@ Every external dependency gets a **30-minute probe ticket on day 1**, before any
 2. **Are the $100 of hackathon inference on a separate key/balance from holder credits?** Still open. Until answered, the demo's coverage excludes any balance flagged as grant.
 3. **Is there a read endpoint for the book (or may we use the page's JSON endpoint)?** Asked 2026-09-08. Gates L1 (probe P-3).
 4. **Is listing holder surplus agentic today?** Asked 2026-09-08. Out of scope either way this week; informs the roadmap section on the landing.
+5. **Is there, or could there be, an API to list a credit-limited OpenRouter key on the book?** (OpenRouter's provisioning API can mint such keys programmatically; the listing step is the missing agentic leg.) To ask. Gates the v2 sell side (§17), not this week.
 
 ## 15. Timeline and cut list
 
@@ -361,3 +362,11 @@ Cut list, in order, if behind: (1) L2a stake-up, (2) L2b integration, (3) agent 
 3. Open the X bot's latest post; show the treasury line and that every number matches the ledger.
 4. `npx create-orbio-agent demo` on camera, no database, → agent appears on the landing within a minute.
 5. Close on the flywheel diagram and the one-liner: the Treasurer manages the gap and shows it in public. Say plainly what is waiting on Orbio's agentic-buy endpoint.
+
+## 17. After the hackathon (direction, not scope)
+
+Written so this week's choices don't close it. The generic product is a **cross-venue inference treasury**: every key the agent holds (Orbio, OpenRouter, Anthropic, OpenAI, subscriptions), a balance source per provider (real API where one exists — OpenRouter credits, Anthropic/OpenAI admin usage — else declared budget minus metered spend), one consolidated burn/runway, routing to the cheapest key that serves the tier, and **both sides of the market**: buy credit where it is cheapest, and list idle or perishable credit where it sells (mint a credit-limited OpenRouter sub-key via the provisioning API, list it on Orbio, get paid). Selling is only rational for credit that cost nothing or will expire (holder distributions, promos, use-it-or-lose-it budgets, cross-venue price gaps), and the policy must say so.
+
+What this week must leave in place for that: the `balance_source` abstraction (already there), the `LedgerStore` seam (already there), `list()` in `BookClient` as a declared capability (FR-5.1), the metering middleware being provider-agnostic (it is: any AI SDK provider), and no Orbio-specific assumption inside `policy/`.
+
+Monetisation candidates for that product, in order of realism: hosted Treasurer (we run the tick, history, alerts, widget), a share of measured savings, and a take rate on credit sold and on x402 revenue an agent earns. None of this is built or priced this week.
