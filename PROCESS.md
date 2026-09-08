@@ -140,11 +140,15 @@ Every audit answers each line explicitly.
 | Public content (X posts, site copy) | Reads the first three generated posts and the submission page copy |
 | Anything that pushes to npm or X | Approves the account and the first publish |
 
-## 6. Daily cadence (7 days)
+## 6. Daily cadence (12 days, Sept 9–20)
 
 **Morning (20 min)** — So reads `STATUS.md`, picks the day's tickets from `tasks/README.md` (the board), answers any *Blocked on*, posts a one-line plan in the builders Telegram.
 
 **Build blocks** — Builder → Auditor → Tester per ticket, sequentially. Two tickets can be in flight if they touch different packages. Never start a third.
+
+**So's 2h/day** — ~30 min morning (plan, answers, secrets), ~30 min evening (three reports per ticket, sign-offs, STATUS.md), ~1h flexible: pairing with an external builder, reviewing public copy, posting. Days So is away: agent stays in dry-run, tickets touching money or public content wait.
+
+**Week 2 rule** — after the Sept 18 18:00 freeze, no ticket that adds behaviour is opened. Bugs, copy, onboarding support only.
 
 **Evening (30 min)** — merge what's `done`, deploy, update `STATUS.md` (what shipped, what's blocked, uptime of the reference agent, budget spent), post a build-in-public update on X and in Telegram with a screenshot or link. Move unfinished tickets, re-split if they grew.
 

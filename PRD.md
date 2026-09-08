@@ -2,11 +2,13 @@
 
 | Field | Value |
 |---|---|
-| Version | 0.2 (hackathon scope, re-cut after Orbio's answer) |
+| Version | 0.3 (deadline moved to Sept 20; week-2 scope added) |
 | Date | 2026-09-08 |
 | Owner | So (product) · Claude (build) |
 | Status | Approved for build. One answer pending from Orbio (§14 Q3) |
-| Event | Orbio Build Week — 7 days of build, projects public by day 7 |
+| Event | Orbio Build Week — **submission deadline moved to 2026-09-20** (extended to onboard more participants). Build window: Sept 9 → 20, 12 days |
+
+**What changed in 0.3:** Orbio extended the hackathon to Sept 20. Week 1 (Sept 9–15) keeps the 0.2 plan unchanged, go-live target Sept 11. Week 2 (Sept 16–20) adds three things and nothing else: integrating Orbio's agentic-buy endpoint when it ships (L2b), an onboarding campaign for the new participants, and a **multi-key balance view** (§8.12: real OpenRouter balance via its credits API, declared budgets for other providers, one consolidated runway). Feature freeze Sept 18 18:00 Paris.
 
 **What changed in 0.2:** Orbio confirmed that buying credit off the book goes through a Whop checkout page (fiat or crypto) and is not agentic; they are building agentic buying themselves this week and encouraged "boilerplate + a project on top + landing + Loom." Consequences: we do **not** build buy/list execution; `BookClient.buy()` becomes an adapter for Orbio's upcoming endpoint; the agentic deficit response becomes **stake-up** (swap USDG → $ORBIO on a DEX, conditional on pool verification); the kit no longer requires Supabase (ledger abstraction, ADR-002); scope trimmed to one polished product (24 committed tickets + 8 probes + 3 conditional); a **fragility map with day-1 probes** is added (§13a).
 
@@ -52,7 +54,7 @@ The people this hits are exactly the population Orbio is built for: solo devs an
 - **Buying or listing credit on the book.** Not agentic today (Whop checkout); Orbio is building it. We ship an adapter with a documented interface and integrate theirs when it exists.
 - An inference price index, per-agent charts, and kit template variants beyond `minimal` and `x-bot`. Cut in 0.2 to keep one polished product.
 - Any LLM in the decision loop. Policy is deterministic rules. The LLM is used only to write the demo bot's daily post and, optionally, to render a decision as a sentence.
-- A generic multi-provider FinOps product (OpenRouter direct, Anthropic, OpenAI keys). Orbio is the only venue this week. The adapter design leaves the door open; nothing is built behind it.
+- A generic multi-provider FinOps product. Week 2 adds *visibility* of other keys (§8.12) and nothing more: no buying, selling or routing across providers other than the Orbio↔OpenRouter pair.
 - A local HTTP proxy that intercepts arbitrary OpenAI-compatible traffic. Metering is SDK-side (§8.3).
 - Custody of anyone else's funds or keys. Each agent runs its own wallet, its own MCP auth, its own Orbio key. The landing stores public metrics only.
 - Buying $ORBIO with anything other than stablecoin already in the agent's wallet. The Treasurer never bridges, never touches the owner's other assets.
@@ -191,6 +193,18 @@ Requirement IDs (`FR-x.y`) are referenced by tickets in `tasks/`. Each has accep
 - **FR-11.3 (Must)** Yield estimate used by the policy: `yield_per_token_per_day` = the agent's own measured accrual per held token over the trailing 24h (falls back to a network-wide estimate from the leaderboard total ÷ supply, flagged `low_confidence`). The widget shows both the estimate and the honest payback in days.
 - **FR-11.4 (Must)** The landing and widget label stake-up as what it is: a purchase of a volatile asset whose yield depends on trading volume. No APY figures; payback in days with a confidence flag.
 
+### 8.12 Multi-key balance view (week 2, conditional on probe P-9)
+
+- **FR-12.1 (Must, week 2)** `treasurer.config.ts` accepts a `keys[]` array. Each key has a `provider` (`orbio` | `openrouter` | `anthropic` | `openai` | `other`), an env var name for the secret, and a `balance_source`: `api` (OpenRouter: credits endpoint; Orbio: MCP/gateway chain) or `declared` (a `budget_usd` plus optional `renews_on`). Balance for `declared` = budget − metered spend since the period start.
+  AC: config with three keys (orbio api, openrouter api, anthropic declared) boots; each key gets its own `key_balances` row per tick with `source` and `low_confidence`.
+- **FR-12.2 (Must, week 2)** Consolidated view: total available across keys, burn per key per day, consolidated runway (min over keys that actually serve traffic, and the portfolio figure), shown on the widget as a second line and on the agent page as a table.
+  AC: snapshot carries `portfolio_available_usd` and `portfolio_runway_days`; widget renders the line; every figure links to the provider's dashboard.
+- **FR-12.3 (Should, week 2)** Key-aware routing for the Orbio↔OpenRouter pair only: `model(tier)` prefers the Orbio key while its credits cover the call, else falls back to the OpenRouter key if configured, and records `key_used` on the usage event.
+  AC: with Orbio credits at 0 and an OpenRouter key present, calls succeed on OpenRouter with `key_used = openrouter`; with credits present, Orbio is used.
+- **FR-12.4 (Must, week 2)** Secrets for additional keys follow the same rules as the Orbio key: env only, redacted, never pushed to the landing. The landing receives per-provider *balances*, never key material.
+
+Probe **P-9** (Sept 16, 30 min): does OpenRouter's credits/key endpoint return usable totals for a normal key? Anthropic/OpenAI usage APIs are *not* probed; they stay `declared` this hackathon.
+
 ### 8.10 Operations
 
 - **FR-10.1 (Must)** The tick runs every 15 minutes (snapshot every tick; hourly aggregates computed from ticks). For the hosted reference agent, scheduling is done by **Supabase Cron (pg_cron + pg_net)** calling `POST /api/cron/tick` with a shared secret, because Vercel Hobby limits cron to once per day. Kit agents run the tick in-process (`setInterval` in a long-running Node process, or any scheduler the builder has). See `ARCHITECTURE.md`.
@@ -288,10 +302,10 @@ Rule ids are stable strings (`R-BUY-1`, `R-STAKE-1`, `R-SIGNAL-1`, `R-ROUTE-TIGH
 
 | Metric | Target |
 |---|---|
-| Reference Treasurer continuous uptime | ≥ 96 hours by day 7, with ≤ 2 missed ticks |
+| Reference Treasurer continuous uptime | ≥ 9 days by Sept 20, with ≤ 5 missed ticks |
 | Decisions logged (all types) | ≥ 200, including ≥ 1 executed `STAKE_UP` if L2a, ≥ 1 executed `BUY_CREDIT` if L2b |
 | Coverage ratio of the reference agent | ≥ 100% (a light agent on a small position must be fully covered, or the pitch is wrong) |
-| Agents registered on the landing | ≥ 2, of which ≥ 1 not built by So |
+| Agents registered on the landing | ≥ 4, of which ≥ 3 not built by So (week-2 onboarding target) |
 | Daily X posts by the demo bot | ≥ 5 consecutive |
 | Hackathon inference budget spent | < $30 of $100 (policy is rule-based; LLM only writes posts) |
 | Kit time-to-first-call | < 5 min on a fresh machine (`FR-7.1`) |
@@ -339,21 +353,30 @@ Every external dependency gets a **30-minute probe ticket on day 1**, before any
 4. **Is listing holder surplus agentic today?** Asked 2026-09-08. Out of scope either way this week; informs the roadmap section on the landing.
 5. **Is there, or could there be, an API to list a credit-limited OpenRouter key on the book?** (OpenRouter's provisioning API can mint such keys programmatically; the listing step is the missing agentic leg.) To ask. Gates the v2 sell side (§17), not this week.
 
-## 15. Timeline and cut list
+## 15. Timeline and cut list (deadline 2026-09-20)
 
-Day-by-day plan lives in `tasks/README.md`. Milestones:
+Day-by-day plan lives in `tasks/README.md`. Dates are Paris time.
 
-- **Day 1** — **all eight probes first**, then ledger (both stores), MCP client with fallback, snapshots flowing.
-- **Day 2** — policy engine tested; executors; metering; dry-run running; buy-adapter contract tests against a mock.
-- **Day 3 (target; day 4 hard limit)** — reference Treasurer **live and public** (widget, status endpoint, landing v1); announce.
-- **Day 4** — X bot posting (built from the kit template); landing shows the feed.
-- **Day 5** — `create-orbio-agent` works on a fresh machine with no database; registry push.
-- **Day 6** — second agent (ideally external); L2a live if P-7 passed and 24h dry-run done; L2b integration if Orbio shipped.
-- **Day 7** — buffer, README, landing final copy, thread, ≤ 3-min video.
+**Week 1 — the 0.2 plan, unchanged**
+- **Sept 8 (D0)** — docs; Supabase/Vercel projects; X developer app requested; pool link.
+- **Sept 9 (D1)** — all eight probes first, then ledger (both stores), MCP client with fallback, snapshots flowing.
+- **Sept 10 (D2)** — policy engine, executors, metering, L2b mock contract; dry-run running.
+- **Sept 11 (D3, target) / Sept 12 (hard limit)** — reference Treasurer **live and public**: API, widget, landing v1. Announce.
+- **Sept 12 (D4)** — Orbio Book Daily posting.
+- **Sept 13 (D5)** — `create-orbio-agent` works on a fresh machine with no database; registry push.
+- **Sept 14 (D6)** — second agent (external); L2a stake-up live if P-7 passed and dry-run done; agent page.
+- **Sept 15 (D7)** — week-1 buffer; README v1; first thread ("live for 4 days, here's what it did").
 
-Why day 3: judging happens days 10–13 and the strongest evidence of "unattended" is history (≥ 96h of ticks), live money needs 24h of dry-run first, and something will break — a day-3 breakage is repaired on day 4 without touching the plan. Day 4 loses nothing irrecoverable; day 5 turns a running system into a demo.
+**Week 2 — integrate, onboard, widen**
+- **Sept 16 (D8)** — probe P-9; multi-key balances (FR-12.1, FR-12.2). L2b integration the day Orbio ships, whenever that is; it displaces the lowest-priority open ticket.
+- **Sept 17 (D9)** — key-aware routing (FR-12.3); onboarding campaign in the builders channel (T-060): recipe, office hours, target 3–5 external agents.
+- **Sept 18 (D10)** — **feature freeze 18:00**. Only bugs, copy, and onboarding support after this.
+- **Sept 19 (D11)** — video (≤ 3 min), launch thread, landing final copy, STATUS.md with PRD §12 metrics.
+- **Sept 20 (D12)** — submission; buffer for whatever the extra participants break.
 
-Cut list, in order, if behind: (1) L2a stake-up, (2) L2b integration, (3) agent detail page (keep the widget + feed), (4) second demo agent by So (but not the external one — chase it), (5) FR-9.3 event posts. Never cut: live reference Treasurer, decision log, widget, kit with SQLite, one demo agent, landing.
+Why go-live stays on Sept 11 even with 12 days: judging evidence is history (aim for ≥ 9 days of ticks by the 20th), live money needs 24h of dry-run first, and every day the reference agent is public is a day the new participants can see it before choosing what to build.
+
+Cut list, in order, if behind on Sept 15: (1) key-aware routing FR-12.3, (2) L2a stake-up, (3) agent detail page, (4) FR-9.3 event posts, (5) multi-key view entirely (then week 2 = integration + onboarding only). Never cut: live reference Treasurer, decision log, widget, kit with SQLite, one demo agent, landing, L2b integration if Orbio ships.
 
 ## 16. Demo script (day 7, ≤ 3 minutes)
 

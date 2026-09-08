@@ -15,6 +15,7 @@ Updated every evening by So after the merge. The judges may read this; keep it f
 - Still open with Orbio: grant on a separate balance? book read endpoint? surplus listing agentic?
 - Defaults: `LEDGER=sqlite` (kit) / `postgres` (hosted), `BOOK_CLIENT=readonly`, `STAKE_CLIENT=none`, `TREASURER_LIVE=false`.
 - Reference agent: not yet running. Budget spent: $0 / $100.
+- **Deadline moved by Orbio to Sept 20.** PRD → 0.3: week 1 unchanged (go-live Sept 11), week 2 = L2b integration + onboarding campaign + multi-key balance view (§8.12), freeze Sept 18 18:00.
 
 ## Template for each day
 
