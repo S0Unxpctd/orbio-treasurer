@@ -1,0 +1,29 @@
+{
+  "name": "orbio-treasurer",
+  "private": true,
+  "version": "0.0.1",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "test:policy": "pnpm --filter @orbio-treasurer/core test -- src/policy",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "turbo run typecheck",
+    "smoke": "pnpm --filter @orbio-treasurer/web smoke",
+    "db:migrate": "supabase db push",
+    "tick": "pnpm --filter @orbio-treasurer/book-daily tick",
+    "probe": "tsx scripts/probe.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.12",
+    "tsx": "^4.20.0",
+    "turbo": "^2.10.12",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}
