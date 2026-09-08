@@ -35,10 +35,21 @@
  * on-site figure to link to an explorer, so over-masking a tx hash in a log line is a
  * real but acceptable cost — a private key slipping through unmasked is not.
  * A call site that knows a particular value is a public hash can opt it out of masking
- * by key name via `redact(value, { allowTxHashKeys: [...] })` — see
- * `DEFAULT_ALLOW_TX_HASH_KEYS`, which is what `log.ts` uses by default. This is an
- * allow-list on the *key name*, never on content: a value's shape alone can never prove
- * it isn't a private key, so there is deliberately no "looks like a tx hash" heuristic.
+ * via `redact(value, { allowTxHashKeys: [...] })` — see `DEFAULT_ALLOW_TX_HASH_KEYS`,
+ * which is what `log.ts` uses by default. The exemption is deliberately narrow, on
+ * both axes, so a key-name mix-up can't turn it into a general bypass:
+ *   - **key name**: must equal (case-insensitively) one of `allowTxHashKeys` exactly —
+ *     no substring/prefix/suffix matching.
+ *   - **value shape**: must itself be a string matching `/^0x[0-9a-f]{64}$/i` exactly —
+ *     the *whole* value, not merely containing a match.
+ * A value that fails either check is never exempted and goes through the normal
+ * pipeline instead: a string gets the full `sk-*`/`Bearer`/JWT/opaque-blob scan, and a
+ * non-string (object, array, …) is recursed into as usual — so `{ txHash: apiKey }` or
+ * `{ txHash: { apiKey } }` are both still fully redacted. This is intentionally an
+ * allow-list on key name AND shape together, never on key name alone: trusting the key
+ * name for an arbitrary value would let a copy-paste bug or a merged upstream field
+ * (e.g. a content hash or password hash also happening to be called `hash`) print a
+ * secret verbatim with no caller-visible signal.
  *
  * ## Known, accepted gap
  * A secret split across whitespace/newlines (e.g. word-wrapped output, a mangled env
@@ -50,13 +61,21 @@
 const ELLIPSIS = '…';
 
 /** Object keys whose value `log.ts` leaves unmasked by default — see the ambiguity note above. */
-export const DEFAULT_ALLOW_TX_HASH_KEYS = ['txHash', 'hash', 'transactionHash'] as const;
+export const DEFAULT_ALLOW_TX_HASH_KEYS = [
+  'txHash',
+  'transactionHash',
+  'tx_hash',
+  'transaction_hash',
+] as const;
 
 export interface RedactOptions {
   /**
-   * Object keys (matched case-insensitively) whose value is left completely untouched —
-   * no masking, no recursion — because the call site knows it's a public identifier
-   * (e.g. a tx hash) that only happens to share the 0x+64-hex private-key shape.
+   * Object keys (matched case-insensitively, exact match only) whose value is left
+   * completely untouched — but ONLY when that value is itself a string matching
+   * `/^0x[0-9a-f]{64}$/i`. Any other key name, or any value under a matching key that
+   * isn't exactly that shape (a different string, an object, an array, …), is never
+   * exempted and goes through normal redaction/recursion instead. See the ambiguity
+   * note above.
    */
   allowTxHashKeys?: readonly string[];
 }
@@ -104,6 +123,8 @@ const RE_OPAQUE_BLOB_G = toGlobal(REDACTION_PATTERNS.opaqueBlob);
 const RE_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const RE_ETH_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const RE_ALL_DIGITS = /^[0-9]+$/;
+// The exact shape allowTxHashKeys is permitted to exempt — see RedactOptions above.
+const RE_ALLOWED_HASH_SHAPE = /^0x[0-9a-f]{64}$/i;
 
 function maskPrefixLast4(raw: string, prefixLen: number): string {
   const prefix = raw.slice(0, prefixLen);
@@ -168,9 +189,16 @@ function isSensitiveKeyName(key: string): boolean {
   );
 }
 
-function isAllowedTxHashKey(key: string, options: RedactOptions): boolean {
+/**
+ * True only when BOTH: `key` exactly matches (case-insensitively) an entry in
+ * `options.allowTxHashKeys`, AND `value` is itself a string matching
+ * `/^0x[0-9a-f]{64}$/i` exactly. Anything else — a wrong key name, a non-string value,
+ * or a string that isn't precisely that shape — is never exempted.
+ */
+function isExemptTxHashValue(key: string, value: unknown, options: RedactOptions): boolean {
   const list = options.allowTxHashKeys;
   if (!list || list.length === 0) return false;
+  if (typeof value !== 'string' || !RE_ALLOWED_HASH_SHAPE.test(value)) return false;
   const lowerKey = key.toLowerCase();
   return list.some((allowed) => allowed.toLowerCase() === lowerKey);
 }
@@ -216,7 +244,7 @@ function redactContainer(
   const result: Record<string, unknown> = {};
   for (const key of Object.keys(obj)) {
     const value = obj[key];
-    if (isAllowedTxHashKey(key, options)) {
+    if (isExemptTxHashValue(key, value, options)) {
       result[key] = value;
       continue;
     }

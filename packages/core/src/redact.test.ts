@@ -298,7 +298,7 @@ describe('redact() — adversarial cases from audit pass 1 (Majors)', () => {
     expect(out.txHash).not.toBe(HARDHAT_PK);
   });
 
-  it('allowTxHashKeys opts a key out of masking entirely, by name', () => {
+  it('allowTxHashKeys opts a key out of masking, but ONLY for an exact 0x+64-hex string value', () => {
     const out = redact(
       { txHash: HARDHAT_PK },
       { allowTxHashKeys: DEFAULT_ALLOW_TX_HASH_KEYS },
@@ -313,6 +313,58 @@ describe('redact() — adversarial cases from audit pass 1 (Majors)', () => {
     ) as Record<string, unknown>;
     expect(out.TxHash).toBe(HARDHAT_PK);
     expect(out.otherField).not.toBe(HARDHAT_PK);
+  });
+});
+
+// --- Pass-2 audit Blocker (tasks/reports/T-003-audit-1.md "## Pass 2"): the allow-list was a
+// whole-value, shape-blind, key-name-only bypass — an allow-listed key exempted ANY value,
+// unmasked and unrecursed. Fixed: the exemption now requires BOTH an exact key-name match AND
+// the value itself being a string matching /^0x[0-9a-f]{64}$/i; everything else is redacted
+// normally. 'hash' was also dropped from the default list (too generic to be a safe default).
+describe('redact() — pass-2 audit fix: allowTxHashKeys requires exact key AND 0x64-hex shape', () => {
+  it('a non-hex-shaped value under an allow-listed key is still fully masked (was leaking)', () => {
+    // repro: log('info', 'x', { txHash: OR_KEY }) previously printed the raw Orbio key.
+    const out = redact(
+      { txHash: OR_KEY },
+      { allowTxHashKeys: DEFAULT_ALLOW_TX_HASH_KEYS },
+    ) as Record<string, unknown>;
+    expect(out.txHash).toBe('sk-or-…1234');
+  });
+
+  it('a nested object under an allow-listed key is still recursed into (was skipped entirely)', () => {
+    // repro: log('info', 'x', { hash: { apiKey: OR_KEY } }) previously left apiKey untouched.
+    const out = redact(
+      { txHash: { apiKey: OR_KEY } },
+      { allowTxHashKeys: DEFAULT_ALLOW_TX_HASH_KEYS },
+    ) as { txHash: { apiKey: string } };
+    expect(out.txHash.apiKey).toBe('sk-or-…1234');
+  });
+
+  it("'hash' is no longer in the default allow-list — a hash-shaped value under it still masks", () => {
+    // repro: log('info', 'x', { hash: HARDHAT_PK }) previously left the private key raw.
+    const out = redact(
+      { hash: HARDHAT_PK },
+      { allowTxHashKeys: DEFAULT_ALLOW_TX_HASH_KEYS },
+    ) as Record<string, unknown>;
+    expect(out.hash).not.toBe(HARDHAT_PK);
+  });
+
+  it('the default allow-list is exactly txHash/transactionHash/tx_hash/transaction_hash', () => {
+    expect(DEFAULT_ALLOW_TX_HASH_KEYS).toEqual([
+      'txHash',
+      'transactionHash',
+      'tx_hash',
+      'transaction_hash',
+    ]);
+    expect(DEFAULT_ALLOW_TX_HASH_KEYS).not.toContain('hash');
+  });
+
+  it('positive case: a real tx-hash-shaped value under an allow-listed key name stays intact', () => {
+    const out = redact(
+      { transactionHash: HARDHAT_PK },
+      { allowTxHashKeys: DEFAULT_ALLOW_TX_HASH_KEYS },
+    ) as Record<string, unknown>;
+    expect(out.transactionHash).toBe(HARDHAT_PK);
   });
 });
 

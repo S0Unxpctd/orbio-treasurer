@@ -188,6 +188,20 @@ describe('log() — adversarial cases from audit pass 1', () => {
     const parsed = JSON.parse(errorSpy.mock.calls[0]?.[0] as string);
     expect(parsed.txHash).toBe(hash);
   });
+
+  // Pass-2 audit Blocker: the allow-list used to exempt ANY value under an allowed key,
+  // unmasked and unrecursed. Fixed: exempts only an exact 0x+64-hex string value.
+  it('a non-hash-shaped value under txHash still masks through a real log() call', () => {
+    log('info', 'x', { txHash: FIXTURE_SECRET });
+    const raw = errorSpy.mock.calls[0]?.[0] as string;
+    expect(raw).not.toContain(FIXTURE_SECRET);
+  });
+
+  it('a nested secret under txHash is still recursed into and masked', () => {
+    log('info', 'x', { txHash: { apiKey: FIXTURE_SECRET } });
+    const raw = errorSpy.mock.calls[0]?.[0] as string;
+    expect(raw).not.toContain(FIXTURE_SECRET);
+  });
 });
 
 describe('createLogger()', () => {
