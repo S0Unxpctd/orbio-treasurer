@@ -23,6 +23,14 @@ Everything learned about Orbio's real interfaces, appended as learned, with date
 
 _(P-1 … P-8: date, yes/no, evidence, default set)_
 
+### P-10 · USDG on Robinhood Chain supports EIP-3009 — **YES** (2026-09-08, read-only eth_call via public RPC)
+
+- RPC `https://rpc.mainnet.chain.robinhood.com` → `eth_chainId` = `0x1237` (4663). Public RPC is documented as rate-limited, "not recommended for production" (Robinhood docs). Testnet chain id 46630. Gas token ETH. Explorer `robinhoodchain.blockscout.com`.
+- USDG address (Paxos docs, Robinhood Mainnet): `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`. `name()` = "Global Dollar", `decimals()` = 6.
+- `TRANSFER_WITH_AUTHORIZATION_TYPEHASH()` = `0x7c7c6cdb67a18743f49ec6fa9b35f50d52ed05cbed4cc592e13b44501c1a2267` (canonical EIP-3009). `PERMIT_TYPEHASH()` = canonical EIP-2612. `version()` reverts (no such function).
+- `DOMAIN_SEPARATOR()` = `0x7a3d7400b27830f4f91c2c16a082486d67c1befecaec2f53b33f1f35d5b62036`, reproduced exactly with EIP-712 domain **{ name: "Global Dollar", version: "1", chainId: 4663, verifyingContract: 0x5fc5…d168 }**. These are the signing parameters for an x402 EIP-3009 payload on this chain.
+- Consequence: PRD §18 path B is technically viable; the missing piece is a facilitator for `eip155:4663` (self-hosted) and Orbio's merchant endpoint.
+
 ## Answers
 
 **2026-09-08, Yash (Orbio), builders Telegram**, on the agent boilerplate with a self-sustaining cycle that buys credits off the order book:
