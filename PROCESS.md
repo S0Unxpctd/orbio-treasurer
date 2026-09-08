@@ -101,17 +101,19 @@ Every audit answers each line explicitly.
 
 **Correctness against PRD**
 - Each AC in the ticket: met / not met / can't tell, with the line of code or test that proves it.
-- Policy math matches PRD §10 exactly (units, `∞` handling, ε floor, clamps, per-day caps counting `bought_today`).
+- Policy math matches PRD §10 exactly (units, `∞` handling, ε floor, per-day caps counting `bought_today` and `staked_today`, payback computation, option selection).
 - Decision rows contain the inputs needed to re-derive the decision (FR-4.6).
 
 **Money and caps**
-- Is there any path where `BUY_CREDIT` or `LIST_SURPLUS` executes in `dry_run`? In `live` without `TREASURER_LIVE=true`? Without 24h history?
-- Can `max_buy_usd_per_day` or `max_spend_usd_per_day` be exceeded by concurrency, retries, or a tick running twice?
+- Is there any path where `BUY_CREDIT` or `STAKE_UP` executes in `dry_run`? In `live` without `TREASURER_LIVE=true`? Without 24h history? Without the round-trip evidence and So's `ok live` in the ticket?
+- Can `max_buy_usd_per_day`, `max_stake_usd_per_day` or `max_spend_usd_per_day` be exceeded by concurrency, retries, or a tick running twice?
+- Stake-up: slippage guard applied to the *quote*, `minOrbioOut` passed to the swap, stable reserve respected, one swap per tick max, wallet private key only read from env?
 - Are order states mutable only via the executor, and only `status`?
 
 **Secrets**
 - Grep the diff for key/token material in logs, errors, DB writes, API responses, test fixtures. Is `redact()` used everywhere a secret could appear?
-- Does any test fixture contain a real-looking key? (Must be `sk-or-v1-TESTONLY…`.)
+- Does any test fixture contain a real-looking key or private key? (Must be `sk-or-v1-TESTONLY…` / a well-known test PK.)
+- SQLite ledger file path excluded from git and from the landing push payload?
 
 **Shape drift**
 - Every external payload parsed with Zod? Unknown fields tolerated, missing required fields fatal?
@@ -133,7 +135,7 @@ Every audit answers each line explicitly.
 
 | Ticket touches | So verifies before sign-off |
 |---|---|
-| Live mode, `roundtrip.ts`, caps | Reads the exact amounts and caps in the ticket; confirms the dedicated wallet balance; types `ok live` in the ticket |
+| Live mode, `roundtrip-*.ts`, caps, `STAKE_CLIENT`/`BOOK_CLIENT` flips | Reads the exact amounts and caps in the ticket; confirms the dedicated wallet's stablecoin and $ORBIO balances on Blockscout; types `ok live` in the ticket |
 | Secrets / env | Sets the values in Vercel/Supabase himself; the agent never sees them in chat |
 | Public content (X posts, site copy) | Reads the first three generated posts and the submission page copy |
 | Anything that pushes to npm or X | Approves the account and the first publish |
@@ -146,7 +148,7 @@ Every audit answers each line explicitly.
 
 **Evening (30 min)** — merge what's `done`, deploy, update `STATUS.md` (what shipped, what's blocked, uptime of the reference agent, budget spent), post a build-in-public update on X and in Telegram with a screenshot or link. Move unfinished tickets, re-split if they grew.
 
-**Non-negotiable day-3 checkpoint** — the reference Treasurer is live and public regardless of anything else. If it isn't, the day-4 plan is *only* that.
+**Day-3 target, day-4 hard limit** — the reference Treasurer is live and public. Day 3 buys 24h more history for judging and a day to absorb whatever breaks; if it slips to day 4 nothing is lost for good, but the day-4 plan is then *only* that.
 
 ## 7. Definition of done (per ticket)
 
@@ -157,7 +159,11 @@ Every audit answers each line explicitly.
 - `STATUS.md` and, if user-facing, `docs/runbook.md` updated.
 - So's `ok` in *Sign-off*.
 
-## 8. Guardrails specific to vibecoding a money-touching system in a week
+## 8. Probes before code (added in PRD 0.2)
+
+Every external dependency listed in `PRD.md §13a` gets a **probe ticket** (P-1 … P-8) on day 1, before any ticket that depends on it starts. A probe is 30 minutes, answers one yes/no question, records the raw redacted evidence in `docs/api-notes.md`, and sets the env default for the layer it gates. Probes skip the audit step (there is no product code) but the tester confirms the evidence is in `api-notes.md` and the default is set. A ticket whose probe is unanswered is `blocked`, not `in-code`.
+
+## 9. Guardrails specific to vibecoding a money-touching system in a week
 
 - **Dry-run is the default state of the universe.** Live is a deliberate, dated, human-signed exception.
 - **The agent never holds the real secrets in the conversation.** So pastes them into Vercel/Supabase; the code reads env.
