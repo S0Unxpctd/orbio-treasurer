@@ -15,6 +15,7 @@ Everything learned about Orbio's real interfaces, appended as learned, with date
 
 1. ~~Book write API?~~ Answered 2026-09-08: no (see Answers).
 2. Is the $100 grant on a separate key/balance from holder credits? (asked 2026-09-07)
+2b. Infra facts learned 2026-09-08: Supabase direct DB host is IPv6-only (unreachable from the cloud sandbox) → use the **Session pooler** URI (`aws-x-<region>.pooler.supabase.com:5432`, user `postgres.<ref>`) in `DATABASE_URL`. The sandbox's git proxy refuses pushes to repos not registered as session sources → So pushes from his Mac (git bundle) or adds the repo to the session's sources. X API console is now `console.x.com`, plan **Pay Per Use** (no free tier); keys come from Default Project → Voir les apps → Keys and tokens.
 3. Read endpoint for the book, or may we use the page's JSON endpoint? (asked 2026-09-08, gates probe P-3)
 4. Is listing holder surplus agentic today? (asked 2026-09-08)
 5. Is there (or could there be) an API to list a credit-limited OpenRouter key on the book? OpenRouter provisioning keys make the key side agentic; the listing side is the gap. (to ask — v2 sell side)
@@ -22,6 +23,20 @@ Everything learned about Orbio's real interfaces, appended as learned, with date
 ## Probe results (PRD §13a)
 
 _(P-1 … P-8: date, yes/no, evidence, default set)_
+
+### P-2 · Gateway key-info / credits endpoint — **NO** (2026-09-08, curl with the real key)
+
+- `ORBIO_GATEWAY_BASE_URL = https://api.orbio.so/api/v1` (from So's dashboard). `GET /models` → 200, OpenAI-style list **with OpenRouter-style `pricing` per model** (prompt/completion/input_cache_read per token) → a live price table is available for FR-3.2's fallback.
+- `GET /auth/key`, `GET /credits`, `GET /key` → HTML (the Next.js site), i.e. not implemented on the gateway. **Remaining quota cannot be read from the gateway**; balance source = MCP (P-1) else `estimate`. Default set: `balance_source` chain = mcp → estimate (no `gateway` step).
+
+### P-4 · Per-call cost from the gateway — **YES** (2026-09-08)
+
+- `POST /chat/completions` with `"usage":{"include":true}` on `inception/mercury-2.5` (6 in / 6 out tokens) returned `usage.cost = 1.14e-06` plus `usage.cost_details.{upstream_inference_cost, upstream_inference_prompt_cost, upstream_inference_completions_cost}`, `is_byok`, token detail blocks. Response also carries `provider`, `service_tier`, `system_fingerprint`. Cost of the probe: $0.0000011.
+- Default set: metering uses `usage.cost` as authoritative; fallback = `/models` pricing × tokens, flagged `estimated`.
+
+### P-7 · Stake pool — **pending**, input received (2026-09-08)
+
+- So supplied a Uniswap **v4 pool id** (bytes32) on Robinhood Chain: `0xa95b1fbdccb15d2b07509b980f63adab8a94303b1781f5ebc53b72942d12ddc1`, pair **ORBIO / NVDIA** (tokenized NVIDIA stock), *not* ORBIO/USDG. Consequences for L2a: the swap path is USDG → NVDIA → ORBIO (two hops) or the agent holds NVDIA as its reserve asset; quote/impact must be read via Uniswap v4 `StateView`/`Quoter` on chain 4663 (addresses to find). Probe P-7 must: read pool liquidity/price, quote a $10 two-hop swap, measure impact, and decide whether a two-hop route is acceptable this week (likely: L2a stays designed-not-shipped unless a direct ORBIO/USDG pool exists).
 
 ### P-10 · USDG on Robinhood Chain supports EIP-3009 — **YES** (2026-09-08, read-only eth_call via public RPC)
 
