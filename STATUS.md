@@ -17,6 +17,13 @@ Updated every evening by So after the merge. The judges may read this; keep it f
 - Reference agent: not yet running. Budget spent: $0 / $100.
 - **Deadline moved by Orbio to Sept 20.** PRD → 0.3: week 1 unchanged (go-live Sept 11), week 2 = L2b integration + onboarding campaign + multi-key balance view (§8.12), freeze Sept 18 18:00.
 
+## Day 0 (evening) — 2026-09-08
+
+- Shipped through Code → Audit → Test (builders/auditors/testers on Sonnet, orchestration on Fable): **T-001** scaffold (1 Blocker caught: probe runner), **T-002** ledger schema both dialects + RLS + append-only + cron SQL + env (2 Majors caught, fixed; 163 tests incl. real Postgres), **T-003** redact()/logger (5 Blockers + 3 Majors + 1 pass-2 Blocker caught, fixed; 152 tests).
+- PRD 0.3.1: orders' mutable set = fill fields; key_meta append-only. Probe P-10 done: USDG on RH chain has EIP-3009 (x402 path B viable). Competitor noted: BagBot.
+- Awaiting So: sign-off T-001/T-002/T-003; ADR-004 rule; GitHub push (CI link); Supabase/Vercel projects; X app; pool link; verify `cron.job` on real Supabase (AC4 of T-002).
+- Tomorrow (Sept 9, D1): probes P-1…P-8 first (need So's MCP token + Orbio key in env), then T-010, T-011, T-012, T-014.
+
 ## Template for each day
 
 ```
