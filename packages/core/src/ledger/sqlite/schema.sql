@@ -1,0 +1,223 @@
+-- GENERATED FILE — do not hand-edit.
+-- Source: packages/core/src/ledger/schema.ts
+-- Regenerate: pnpm --filter @orbio-treasurer/core gen:sql
+-- Single-file ledger schema for kit agents (ADR-002). Money and token amounts are TEXT
+-- decimal strings, never REAL — see schema.ts. Foreign keys are declared but SQLite only
+-- enforces them when the connection runs `PRAGMA foreign_keys = ON;` (per-connection,
+-- not persisted in this file — the repository layer, T-011, must set it on open).
+-- One row per registered agent (reference or kit-built). PRD §9.
+CREATE TABLE IF NOT EXISTS agents (
+  id TEXT PRIMARY KEY NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  wallet_address TEXT,
+  chain TEXT NOT NULL DEFAULT 'robinhood',
+  repo_url TEXT,
+  x_handle TEXT,
+  template TEXT,
+  policy TEXT,
+  mode TEXT NOT NULL CHECK (mode in ('dry_run','live')),
+  agent_token_hash TEXT,
+  public INTEGER NOT NULL DEFAULT 1 CHECK (public in (0,1)),
+  last_seen_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+-- Metadata about Orbio keys the agent has held — never the key itself. PRD §9.
+CREATE TABLE IF NOT EXISTS key_meta (
+  id TEXT PRIMARY KEY NOT NULL,
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  key_prefix TEXT NOT NULL,
+  key_last4 TEXT NOT NULL,
+  revoked_at TEXT,
+  reason TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+-- Append-only. PRD §9 + the balance/yield columns added after §9's prose.
+CREATE TABLE IF NOT EXISTS treasury_snapshots (
+  id TEXT PRIMARY KEY NOT NULL,
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  as_of TEXT NOT NULL,
+  credits_available TEXT,
+  credits_accrued_delta TEXT,
+  key_spent_total TEXT,
+  key_remaining TEXT,
+  orbio_balance_tokens TEXT,
+  orbio_price_usd TEXT,
+  accrual_rate_per_day TEXT,
+  burn_rate_per_day TEXT,
+  burn_low_confidence INTEGER NOT NULL DEFAULT 0 CHECK (burn_low_confidence in (0,1)),
+  runway_days TEXT,
+  coverage_ratio TEXT,
+  state TEXT NOT NULL,
+  reconciliation_delta TEXT,
+  balance_source TEXT NOT NULL CHECK (balance_source in ('mcp','gateway','estimate')),
+  stable_balance_usd TEXT,
+  yield_per_token_per_day TEXT,
+  yield_low_confidence INTEGER NOT NULL DEFAULT 0 CHECK (yield_low_confidence in (0,1)),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_treasury_snapshots_agent_id_as_of_desc ON treasury_snapshots (agent_id, as_of DESC);
+-- Append-only. One row per metered inference call. PRD §9.
+CREATE TABLE IF NOT EXISTS usage_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  at TEXT NOT NULL,
+  model TEXT NOT NULL,
+  tier_requested TEXT,
+  tier_served TEXT,
+  prompt_tokens INTEGER,
+  completion_tokens INTEGER,
+  cost_usd TEXT,
+  latency_ms INTEGER,
+  status TEXT NOT NULL,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_usage_events_agent_id_at_desc ON usage_events (agent_id, at DESC);
+-- Append-only. Policy engine output; also the public feed. PRD §9 + §10.
+CREATE TABLE IF NOT EXISTS decisions (
+  id TEXT PRIMARY KEY NOT NULL,
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  at TEXT NOT NULL,
+  type TEXT NOT NULL,
+  rule_id TEXT,
+  state_before TEXT,
+  state_after TEXT,
+  inputs TEXT,
+  action TEXT,
+  executed INTEGER NOT NULL DEFAULT 0 CHECK (executed in (0,1)),
+  result TEXT,
+  human TEXT,
+  public INTEGER NOT NULL DEFAULT 1 CHECK (public in (0,1)),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_agent_id_at_desc ON decisions (agent_id, at DESC);
+CREATE INDEX IF NOT EXISTS idx_decisions_at_desc ON decisions (at DESC);
+-- Append-only. Global book state, not per-agent. PRD §9.
+CREATE TABLE IF NOT EXISTS book_snapshots (
+  id TEXT PRIMARY KEY NOT NULL,
+  at TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source in ('api','page')),
+  view TEXT,
+  total_available_usd TEXT,
+  best_discount_pct TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_book_snapshots_at_desc ON book_snapshots (at DESC);
+-- status (and a few settlement fields) is the only mutable data. PRD §9.
+CREATE TABLE IF NOT EXISTS orders (
+  id TEXT PRIMARY KEY NOT NULL,
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  decision_id TEXT NOT NULL REFERENCES decisions(id),
+  side TEXT NOT NULL CHECK (side in ('buy','stake')),
+  model TEXT,
+  usd TEXT NOT NULL,
+  discount_pct TEXT,
+  external_id TEXT,
+  status TEXT NOT NULL,
+  filled_usd TEXT,
+  fee_usd TEXT,
+  orbio_out TEXT,
+  price_impact_pct TEXT,
+  placed_at TEXT NOT NULL,
+  resolved_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- Append-only / mutable-column-guard triggers.
+
+CREATE TRIGGER IF NOT EXISTS trg_agents_no_delete
+BEFORE DELETE ON agents
+BEGIN
+  SELECT RAISE(ABORT, 'agents rows cannot be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_agents_guard_update
+BEFORE UPDATE ON agents
+WHEN (
+    NEW.id IS NOT OLD.id
+    OR NEW.slug IS NOT OLD.slug
+    OR NEW.wallet_address IS NOT OLD.wallet_address
+    OR NEW.chain IS NOT OLD.chain
+    OR NEW.policy IS NOT OLD.policy
+    OR NEW.mode IS NOT OLD.mode
+    OR NEW.agent_token_hash IS NOT OLD.agent_token_hash
+    OR NEW.public IS NOT OLD.public
+    OR NEW.created_at IS NOT OLD.created_at
+)
+BEGIN
+  SELECT RAISE(ABORT, 'agents: only name, repo_url, x_handle, template, last_seen_at may be updated');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_treasury_snapshots_no_update
+BEFORE UPDATE ON treasury_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'treasury_snapshots is append-only: UPDATE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_treasury_snapshots_no_delete
+BEFORE DELETE ON treasury_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'treasury_snapshots is append-only: DELETE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_usage_events_no_update
+BEFORE UPDATE ON usage_events
+BEGIN
+  SELECT RAISE(ABORT, 'usage_events is append-only: UPDATE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_usage_events_no_delete
+BEFORE DELETE ON usage_events
+BEGIN
+  SELECT RAISE(ABORT, 'usage_events is append-only: DELETE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_decisions_no_update
+BEFORE UPDATE ON decisions
+BEGIN
+  SELECT RAISE(ABORT, 'decisions is append-only: UPDATE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_decisions_no_delete
+BEFORE DELETE ON decisions
+BEGIN
+  SELECT RAISE(ABORT, 'decisions is append-only: DELETE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_book_snapshots_no_update
+BEFORE UPDATE ON book_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'book_snapshots is append-only: UPDATE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_book_snapshots_no_delete
+BEFORE DELETE ON book_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'book_snapshots is append-only: DELETE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_orders_no_delete
+BEFORE DELETE ON orders
+BEGIN
+  SELECT RAISE(ABORT, 'orders rows cannot be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_orders_guard_update
+BEFORE UPDATE ON orders
+WHEN (
+    NEW.id IS NOT OLD.id
+    OR NEW.agent_id IS NOT OLD.agent_id
+    OR NEW.decision_id IS NOT OLD.decision_id
+    OR NEW.side IS NOT OLD.side
+    OR NEW.model IS NOT OLD.model
+    OR NEW.usd IS NOT OLD.usd
+    OR NEW.discount_pct IS NOT OLD.discount_pct
+    OR NEW.orbio_out IS NOT OLD.orbio_out
+    OR NEW.price_impact_pct IS NOT OLD.price_impact_pct
+    OR NEW.placed_at IS NOT OLD.placed_at
+    OR NEW.created_at IS NOT OLD.created_at
+)
+BEGIN
+  SELECT RAISE(ABORT, 'orders: only status, filled_usd, fee_usd, resolved_at, external_id may be updated');
+END;

@@ -18,9 +18,16 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p scripts/tsconfig.json --noEmit",
+    "gen:sql": "tsx scripts/gen-sql.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "postgres": "^3.4.9",
+    "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.13.3",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"
