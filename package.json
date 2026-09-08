@@ -10,10 +10,10 @@
     "dev": "turbo run dev --parallel",
     "build": "turbo run build",
     "test": "turbo run test",
-    "test:policy": "pnpm --filter @orbio-treasurer/core test -- src/policy",
+    "test:policy": "pnpm --filter @orbio-treasurer/core exec vitest run src/policy --passWithNoTests",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "typecheck": "turbo run typecheck",
+    "typecheck": "turbo run typecheck && tsc -p scripts/tsconfig.json --noEmit",
     "smoke": "pnpm --filter @orbio-treasurer/web smoke",
     "db:migrate": "supabase db push",
     "tick": "pnpm --filter @orbio-treasurer/book-daily tick",
@@ -24,6 +24,8 @@
     "tsx": "^4.20.0",
     "turbo": "^2.10.12",
     "typescript": "^5.9.0",
-    "vitest": "^4.0.0"
-  }
+    "vitest": "^4.0.0",
+    "@types/node": "^24.0.0"
+  },
+  "type": "module"
 }
