@@ -8,7 +8,7 @@ Companion to `PRD.md`. This file locks the technical decisions so the coding age
 |---|---|---|
 | Language | TypeScript everywhere, strict mode | One language for lib, CLI, site, bot |
 | Package manager / monorepo | pnpm workspaces + Turborepo | Fast, simple, standard |
-| Web + API | Next.js 16 (App Router, Route Handlers) on Vercel — current major at scaffold time (T-001) | Public URL in minutes; edge caching for read endpoints |
+| Web + API | Next.js 16 (App Router, Route Handlers) on Vercel — see ADR-004 | Public URL in minutes; edge caching for read endpoints |
 | Ledger (kit agents) | **SQLite** via `better-sqlite3`, one file, created on first run | Zero provisioning; a builder must never need a database account to run the kit (ADR-002) |
 | Ledger (hosted reference + landing) | Supabase Postgres, RLS on, service role for writes | Managed, free tier enough, Vault for secrets, pg_cron |
 | Scheduling (hosted) | **Supabase Cron (pg_cron + pg_net)** → `POST /api/cron/tick` every 15 min with `x-cron-secret` | Vercel Hobby cron is once per day; Supabase runs every minute if needed |
