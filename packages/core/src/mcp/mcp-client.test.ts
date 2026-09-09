@@ -18,6 +18,7 @@ import {
   InMemoryTokenStore,
   McpHttpError,
   type McpTokenPair,
+  type McpTokenStore,
   type McpToolCallResult,
   type McpToolName,
   type McpTransport,
@@ -280,6 +281,107 @@ describe('OrbioMcpClient — 401 → refresh → retry (mocked transport)', () =
       String(call[0]).includes('MCP_UNAVAILABLE'),
     );
     expect(unavailableLines).toHaveLength(1);
+  });
+});
+
+describe('OrbioMcpClient — single-flighted token refresh under concurrency (audit-1 Major)', () => {
+  it('two concurrent callTool()s that both hit 401 share ONE refresh, with no spurious MCP_UNAVAILABLE', async () => {
+    // Reproduces the auditor's repro exactly: getBalance() and getKeyStatus() racing via
+    // Promise.all, both observing the same expired/401'd token.
+    const behaviors: ToolBehavior[] = [alwaysThrow401, fixtureBehavior()];
+    const { factory } = scriptedTransportFactory(behaviors);
+    const refresh = vi.fn().mockResolvedValue({
+      accessToken: 'access-token-SHARED-refresh-1234567',
+      refreshToken: 'refresh-token-SHARED-refresh-1234567',
+      expiresAt: new Date('2026-09-09T05:00:00.000Z').toISOString(),
+    });
+    const client = new OrbioMcpClient({
+      mcpUrl: MCP_URL,
+      tokenStore: new InMemoryTokenStore(tokenPair()),
+      transportFactory: factory,
+      oauthRefresher: { refresh },
+    });
+
+    const [balance, keyStatus] = await Promise.all([client.getBalance(), client.getKeyStatus()]);
+
+    expect(balance).toEqual({ valueMicroUsd: '100816235' });
+    expect(keyStatus.hasKey).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    const unavailableLines = consoleErrorSpy.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes('MCP_UNAVAILABLE'),
+    );
+    expect(unavailableLines).toHaveLength(0);
+  });
+
+  it('two concurrent callTool()s that both see a near-expiry token share ONE proactive refresh', async () => {
+    const behaviors: ToolBehavior[] = [fixtureBehavior()];
+    const { factory, constructedWithTokens } = scriptedTransportFactory(behaviors);
+    const refresh = vi.fn().mockResolvedValue({
+      accessToken: 'access-token-PROACTIVE-SHARED-123456',
+      refreshToken: 'refresh-token-PROACTIVE-SHARED-123456',
+      expiresAt: new Date('2026-09-09T05:00:00.000Z').toISOString(),
+    });
+    const client = new OrbioMcpClient({
+      mcpUrl: MCP_URL,
+      tokenStore: new InMemoryTokenStore(
+        tokenPair({ expiresAt: new Date('2026-09-09T04:00:00.000Z').toISOString() }),
+      ),
+      transportFactory: factory,
+      oauthRefresher: { refresh },
+      clock: () => new Date('2026-09-09T03:57:00.000Z'), // 3 min out — inside the 5-min margin
+    });
+
+    await Promise.all([client.getBalance(), client.getKeyStatus()]);
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // Only ONE transport instance was ever built, and it was built with the fresh token — both
+    // calls joined the same refresh and neither retried against the stale one.
+    expect(constructedWithTokens).toEqual(['access-token-PROACTIVE-SHARED-123456']);
+  });
+
+  it('fails closed when tokenStore.save() throws after a successful server refresh: keeps serving the old access token, logs once, never retries proactively with the now-consumed refresh token', async () => {
+    const behaviors: ToolBehavior[] = [fixtureBehavior()];
+    const { factory, constructedWithTokens } = scriptedTransportFactory(behaviors);
+    const save = vi.fn().mockRejectedValue(new Error('disk full'));
+    const failingStore: McpTokenStore = {
+      load: async () =>
+        tokenPair({ expiresAt: new Date('2026-09-09T04:00:00.000Z').toISOString() }),
+      save,
+    };
+    const refresh = vi.fn().mockResolvedValue({
+      accessToken: 'access-token-SERVER-ROTATED-abcdefgh',
+      refreshToken: 'refresh-token-SERVER-ROTATED-abcdefgh',
+      expiresAt: new Date('2026-09-09T05:00:00.000Z').toISOString(),
+    });
+    const client = new OrbioMcpClient({
+      mcpUrl: MCP_URL,
+      tokenStore: failingStore,
+      transportFactory: factory,
+      oauthRefresher: { refresh },
+      clock: () => new Date('2026-09-09T03:57:00.000Z'), // near expiry -> proactive refresh
+    });
+
+    // First call: proactive refresh fires, the server call succeeds, save() fails -> fail
+    // closed. The OLD access token is still valid, so the call itself must still succeed using
+    // it (not McpUnavailableError, not a crash).
+    const first = await client.getBalance();
+    expect(first).toEqual({ valueMicroUsd: '100816235' });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(constructedWithTokens).toEqual(['access-token-original-abcdefghijklmnop']);
+
+    // Second call: still "near expiry" by the same fixed clock, but the now-known-consumed
+    // refresh token must NOT be retried proactively again.
+    const second = await client.getKeyStatus();
+    expect(second.hasKey).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1); // not called again
+    expect(save).toHaveBeenCalledTimes(1); // not called again
+
+    const saveFailureLines = consoleErrorSpy.mock.calls.filter((call: unknown[]) =>
+      String(call[0]).includes('mcp-refresh-store-save-failed'),
+    );
+    expect(saveFailureLines).toHaveLength(1); // logged exactly once, not once per call
   });
 });
 

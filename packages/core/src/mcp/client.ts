@@ -303,6 +303,26 @@ export class OrbioMcpClient {
   /** idempotencyKey -> in-flight/completed rotation, so a retry with the same key can never
    *  cause a second `orbio_create_key` call (audit focus: "Retries creating two keys"). */
   private readonly rotations = new Map<string, Promise<KeyRotateResult>>();
+  /**
+   * Single-flight guard for token refresh (audit-1 Major finding). `ensureFreshToken()`'s
+   * proactive path and `callTool()`'s 401 path both call `tryRefresh()`; every concurrent
+   * caller — on the same tick, e.g. `getBalance()` and `getKeyStatus()` racing via
+   * `Promise.all` — must await the SAME refresh attempt instead of each issuing its own,
+   * since the real refresh_token is single-use (P-1): two independent calls would burn it
+   * twice, and the loser would either hard-fail against the server or race `tokenStore.save()`.
+   * Set and read synchronously (no `await` between the null-check and the assignment below),
+   * so two callers invoked back-to-back in the same microtask (as `Promise.all` does) can never
+   * both observe `null` — see `tryRefresh()`. Once the shared promise resolves, EVERY caller
+   * reads the fresh pair straight from `this.tokens` (already updated by then) rather than
+   * re-reading the token store — a plain field read achieves the same "use the fresh pair, not
+   * a second refresh" outcome the ticket asks for, with no extra I/O.
+   */
+  private refreshPromise: Promise<boolean> | null = null;
+  /** Set when a refresh's server call succeeded but persisting the new pair failed — see
+   *  `doRefresh()`'s save()-failure branch and `ensureFreshToken()`. */
+  private refreshTokenConsumedLocally = false;
+  /** "log once" companion to `refreshTokenConsumedLocally`. */
+  private loggedRefreshSaveFailure = false;
 
   constructor(config: OrbioMcpClientConfig) {
     this.mcpUrl = config.mcpUrl;
@@ -474,9 +494,22 @@ export class OrbioMcpClient {
         throw new McpUnavailableError('no MCP token available in the token store');
       }
     }
-    if (this.isNearExpiry()) {
+    // `!this.refreshTokenConsumedLocally` gates the ATTEMPT: once a previous call's refresh
+    // succeeded server-side but failed to persist locally, the refresh token is already burnt
+    // (P-1: single-use) — attempting it again proactively here is doomed and would hammer the
+    // token endpoint every single call until real expiry. Skip straight to using the still-valid
+    // old access token instead; a 401 (if the server ever rejects it before its stated expiry)
+    // still gets the normal one-refresh-attempt-on-401 treatment in callTool() below — that
+    // attempt is a real server round-trip ("the server returned an error"), not a retry this
+    // skips.
+    if (this.isNearExpiry() && !this.refreshTokenConsumedLocally) {
       const ok = await this.tryRefresh();
-      if (!ok) {
+      // Don't throw for the fail-closed save() case (audit-1): `doRefresh()` already set
+      // `refreshTokenConsumedLocally` for it, and the old access token — untouched, since
+      // `this.tokens` was deliberately never reassigned — is still valid, so just fall through
+      // and use it. Only a GENUINE failure (server rejected the refresh, network error, ...)
+      // throws here: there is then no way to renew a token that actually is near/at expiry.
+      if (!ok && !this.refreshTokenConsumedLocally) {
         this.markUnreachable('proactive-refresh', new Error('proactive refresh failed'));
         throw new McpUnavailableError('token near expiry and proactive refresh failed');
       }
@@ -490,10 +523,28 @@ export class OrbioMcpClient {
     return msLeft < PROACTIVE_REFRESH_MARGIN_MS;
   }
 
-  /** One refresh attempt. On success, persists the (possibly rotated) pair via the token store
-   *  and awaits that write BEFORE the new access token is used for anything (see file header
-   *  and token-store.ts), then drops the current transport so the next call reconnects with it. */
-  private async tryRefresh(): Promise<boolean> {
+  /**
+   * Single-flighted entry point: `ensureFreshToken()`'s proactive path and `callTool()`'s 401
+   * path both call this. If a refresh is already in flight, every caller awaits that SAME
+   * promise instead of starting a second one (audit-1 Major fix) — see `refreshPromise`'s
+   * field comment for why the check-then-assign below is safe against `Promise.all`-style
+   * concurrent callers despite not being behind a lock.
+   */
+  private tryRefresh(): Promise<boolean> {
+    if (this.refreshPromise !== null) return this.refreshPromise;
+    const attempt = this.doRefresh().finally(() => {
+      this.refreshPromise = null;
+    });
+    this.refreshPromise = attempt;
+    return attempt;
+  }
+
+  /** One refresh attempt's actual work — only ever called by `tryRefresh()`, at most once at a
+   *  time (never call this directly from two places, or the single-flight guard above is
+   *  bypassed). On success, persists the (possibly rotated) pair via the token store and awaits
+   *  that write BEFORE the new access token is used for anything (see file header and
+   *  token-store.ts), then drops the current transport so the next call reconnects with it. */
+  private async doRefresh(): Promise<boolean> {
     if (this.tokens === null) return false;
     try {
       const result = await this.oauthRefresher.refresh(this.tokens, this.clock);
@@ -503,8 +554,30 @@ export class OrbioMcpClient {
         ...(result.expiresAt !== undefined ? { expiresAt: result.expiresAt } : {}),
         ...(this.tokens.clientId !== undefined ? { clientId: this.tokens.clientId } : {}),
       };
-      await this.tokenStore.save(newPair);
+      try {
+        await this.tokenStore.save(newPair);
+      } catch (saveErr) {
+        // FAIL CLOSED (audit-1): the server call above already succeeded and rotated the
+        // refresh token server-side, but we could not persist the new pair locally. Do NOT
+        // adopt the in-memory-only pair — a value nothing durable can recover after a process
+        // restart is worse than staying on the old one. `this.tokens` is deliberately left
+        // untouched: the old access token is still valid until it actually expires, so calls
+        // keep working; `refreshTokenConsumedLocally` stops `ensureFreshToken()` from
+        // proactively retrying a refresh that is now guaranteed to fail (the refresh token was
+        // already burnt) — only a genuine 401 gets to attempt it again, via the normal 401 path,
+        // and that attempt is allowed to fail with a real server error. Logged once.
+        if (!this.loggedRefreshSaveFailure) {
+          log('warn', 'mcp-refresh-store-save-failed', {
+            error: redact(saveErr instanceof Error ? saveErr.message : String(saveErr)),
+          });
+          this.loggedRefreshSaveFailure = true;
+        }
+        this.refreshTokenConsumedLocally = true;
+        return false;
+      }
       this.tokens = newPair;
+      this.refreshTokenConsumedLocally = false;
+      this.loggedRefreshSaveFailure = false;
       if (this.transport !== null) {
         const old = this.transport;
         this.transport = null;

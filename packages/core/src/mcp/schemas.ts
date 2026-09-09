@@ -114,6 +114,13 @@ export interface RecordUnrecognizedSampleOptions {
  * section (CLAUDE.md rule 6: "redacted sample appended ... tick fails loudly"). Best-effort:
  * callers should catch/log a failure here rather than let a docs-append problem mask the
  * original `AdapterShapeError` they are about to (re)throw.
+ *
+ * `err.message` is passed through `redact()` too (audit-1 Minor), not only `redactedSample`.
+ * Today it is safe either way — zod's `safeParse().error.message` only ever describes
+ * type/pattern/path, never echoes the received value — but that is an implicit property of a
+ * third-party library's error format, not an invariant this module enforces itself; a future
+ * zod version, or a schema whose custom `.refine()`/`.transform()` message happens to
+ * interpolate the input, would otherwise reintroduce a leak here with nothing to catch it.
  */
 export async function recordUnrecognizedSample(
   err: AdapterShapeError,
@@ -123,7 +130,7 @@ export async function recordUnrecognizedSample(
   const now = options.now ?? (() => new Date());
   const date = now().toISOString().slice(0, 10);
   const block =
-    `\n- **${date} · ${err.tool}** (T-010 \`AdapterShapeError\`, auto-appended): ${err.message}\n` +
+    `\n- **${date} · ${err.tool}** (T-010 \`AdapterShapeError\`, auto-appended): ${redact(err.message)}\n` +
     '  ```json\n' +
     `  ${JSON.stringify(err.redactedSample)}\n` +
     '  ```\n';
