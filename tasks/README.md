@@ -11,9 +11,9 @@ Tickets follow `PROCESS.md`. Status lives inside each ticket; this table is upda
 | [T-003](T-003.md) | redact() + structured logger | 0 | Sept 8 | L0 | 1.5h | T-001 | done |
 | **D1 — PROBES FIRST (P-1…P-8), then data flowing** | | | Sept 9 | | | | |
 | [P-001](P-001.md) | Probe P-1 · MCP headless auth | 1 | Sept 9 | L0 | 0.5h | T-001 | in-test (script ready; run with So) |
-| [P-002](P-002.md) | Probe P-2 · Gateway key-info endpoint | 1 | Sept 9 | L0 | 0.5h | T-001 | todo |
-| [P-003](P-003.md) | Probe P-3 · Book read source | 1 | Sept 9 | L1 | 0.5h | T-001 | todo |
-| [P-004](P-004.md) | Probe P-4 · Per-call cost from gateway | 1 | Sept 9 | L0 | 0.5h | T-001 | todo |
+| [P-002](P-002.md) | Probe P-2 · Gateway key-info endpoint | 1 | Sept 9 | L0 | 0.5h | T-001 | done (NO, 09-08) |
+| [P-003](P-003.md) | Probe P-3 · Book read source | 1 | Sept 9 | L1 | 0.5h | T-001 | in-test (NO → BOOK read=none) |
+| [P-004](P-004.md) | Probe P-4 · Per-call cost from gateway | 1 | Sept 9 | L0 | 0.5h | T-001 | done (YES, 09-08) |
 | [P-005](P-005.md) | Probe P-5 · Serverless tick budget | 1 | Sept 9 | L0 | 0.5h | T-001 | todo |
 | [P-006](P-006.md) | Probe P-6 · X developer app | 1 | Sept 9 | L1 | 0.5h | T-001 | todo |
 | [P-007](P-007.md) | Probe P-7 · Stake pool on Robinhood Chain | 1 | Sept 9 | L2a | 0.5h | T-001 | todo |
@@ -23,7 +23,7 @@ Tickets follow `PROCESS.md`. Status lives inside each ticket; this table is upda
 | [T-012](T-012.md) | BookClient interface + ReadOnlyBookClient (conditional on P-3) | 1 | Sept 9 | L1 | 2.5h | T-003, P-003 | todo |
 | [T-014](T-014.md) | tick(): snapshot pipeline in dry_run + cron route | 1 | Sept 9 | L0 | 3h | T-010, T-011, T-012, P-005, P-008 | todo |
 | **D2 — policy, executors, metering, L2b mock (dry-run running)** | | | Sept 10 | | | | |
-| [T-015](T-015.md) | Policy engine: evaluate(), states, funding options, humanize() | 2 | Sept 10 | L0 | 4.5h | T-011 | todo |
+| [T-015](T-015.md) | Policy engine: evaluate(), states, funding options, humanize() | 2 | Sept 10 | L0 | 4.5h | T-011 | done (pending So) |
 | [T-016](T-016.md) | Executors: route, signal, rotate, alert + live gating | 2 | Sept 10 | L0 | 3h | T-015, T-014 | todo |
 | [T-017](T-017.md) | Metering middleware + treasurer.model(tier) + BudgetExceeded | 2 | Sept 10 | L0 | 3h | T-011, T-015, P-004 | todo |
 | [T-018](T-018.md) | L2b contract: OrbioAgenticBuyClient against a local mock | 2 | Sept 10 | L2b | 2.5h | T-016 | todo |
