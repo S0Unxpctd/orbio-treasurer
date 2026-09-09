@@ -25,6 +25,15 @@ Everything learned about Orbio's real interfaces, appended as learned, with date
 
 _(P-1 … P-8: date, yes/no, evidence, default set)_
 
+### P-1 · MCP headless auth — **YES** (2026-09-09, `scripts/probes/p1-mcp-auth.ts` + one-off refresh call)
+- Discovery: RFC 9728 protected-resource metadata **and** RFC 8414 AS metadata both served; AS = `https://www.orbio.so`; `token_endpoint` `https://www.orbio.so/api/mcp/oauth/token`, `revocation_endpoint` `…/oauth/revoke`; `grant_types_supported` = `authorization_code, refresh_token`; `token_endpoint_auth_methods_supported` = `none`; scope `orbio:credits`.
+- Dynamic client registration (RFC 7591) works: public client, no secret. Authorize URL `https://www.orbio.so/mcp/authorize`, PKCE S256, redirect to `http://localhost:3333/callback` accepted; So approved once in a browser and pasted the callback URL (headless flow works).
+- Access token: Bearer, **`expires_in` 3600 s** (observed: issued 01:22:05Z, rejected at 02:39:14Z with `{"error":"unauthorized","error_description":"The access token is invalid, expired, or was revoked."}` — the 401 surfaces on the Streamable HTTP initialize POST, not only on tool calls).
+- Refresh: `grant_type=refresh_token` with `client_id` only → **200 in 769 ms**, new `access_token` (3600 s), **new `refresh_token` (rotated — the old one must be assumed single-use; persist the new pair atomically before using it)**, `scope`, `resource`, `token_type=Bearer`. Right after refresh: `list_tools` + `orbio_get_balance` ok (218 ms).
+- Calls before expiry: 5/5 `orbio_get_balance` ok over 40 min, 228–794 ms. The 6 h loop did not survive the sandbox going idle (background process killed, no error) — token lifetime and refresh were therefore verified with an expired token at 02:39Z rather than by a continuous run.
+- Tool list observed: `orbio_get_balance`, `orbio_get_key_status`, `orbio_create_key`, `orbio_revoke_key`, `orbio_delete_key` (delete_key not in the public docs).
+- **Default set (FR-2.0): `balance_source` chain = `mcp` → `estimate`** (no gateway step, per P-2). MCP client (T-010) must: refresh proactively when `expires_at − now < 5 min`, refresh once on 401 at connect *or* tool call, persist rotated refresh tokens atomically, and fall to `estimate` + `MCP_UNAVAILABLE` if refresh fails (the refresh token then needs one human re-auth).
+
 ### P-3 · Book read source — **NO** (2026-09-09)
 
 - Method: curl, no auth, no session cookies, GET only, ~26 requests total, 1s apart, ≤30min. Checked `robots.txt`/`sitemap.xml`, homepage HTML/RSC payload, `/api/{book,orders,market,listings,credits,sales,orderbook}` on `www.orbio.so`, `/api/v1/{book,orders,market,listings,credits}` on the gateway (`api.orbio.so`), and dedicated pages (`/book`, `/market`, `/credits`, `/leaderboard`). All `/api/*` and page candidates → **404** (Next.js catch-all HTML, not JSON). `GET /credits` → 308 redirect to `/` (no separate book page; the homepage *is* the book page). `GET /leaderboard` → 308 to `https://sellers.orbio.so/leaderboard` (200, public, but that's the leaderboard, not the book).

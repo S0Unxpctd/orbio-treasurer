@@ -127,10 +127,9 @@ The MCP is designed for interactive clients; headless token lifetime is unknown 
 
 ```
 boot:  mcp.create_key (once) → key in env/Vault
-tick:  balance = try mcp.get_balance
-               ?? try gateway.keyInfo(key)        # probe P-2, OpenRouter-compatible endpoint if present
-               ?? estimate(last_known − metered_spend + expected_accrual)
-       snapshot.balance_source = 'mcp' | 'gateway' | 'estimate'
+tick:  balance = try mcp.get_balance                # P-1 (2026-09-09): YES — 3600 s access token, refresh_token grant works headless, refresh token rotates
+               ?? estimate(last_known − metered_spend + expected_accrual)   # P-2 (2026-09-08): NO gateway key-info endpoint → no gateway step
+       snapshot.balance_source = 'mcp' | 'estimate'  # 'gateway' reserved, never produced
 ```
 
 Inference always goes through the key via the AI SDK; the MCP is a reporting and rotation channel, not a dependency for serving.

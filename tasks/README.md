@@ -10,7 +10,7 @@ Tickets follow `PROCESS.md`. Status lives inside each ticket; this table is upda
 | [T-002](T-002.md) | Ledger schema (both dialects), RLS, append-only triggers, cron SQL | 0 | Sept 8 | L0 | 3.5h | T-001 | done |
 | [T-003](T-003.md) | redact() + structured logger | 0 | Sept 8 | L0 | 1.5h | T-001 | done |
 | **D1 — PROBES FIRST (P-1…P-8), then data flowing** | | | Sept 9 | | | | |
-| [P-001](P-001.md) | Probe P-1 · MCP headless auth | 1 | Sept 9 | L0 | 0.5h | T-001 | in-test (script ready; run with So) |
+| [P-001](P-001.md) | Probe P-1 · MCP headless auth | 1 | Sept 9 | L0 | 0.5h | T-001 | done (YES, 09-09; pending So) |
 | [P-002](P-002.md) | Probe P-2 · Gateway key-info endpoint | 1 | Sept 9 | L0 | 0.5h | T-001 | done (NO, 09-08) |
 | [P-003](P-003.md) | Probe P-3 · Book read source | 1 | Sept 9 | L1 | 0.5h | T-001 | in-test (NO → BOOK read=none) |
 | [P-004](P-004.md) | Probe P-4 · Per-call cost from gateway | 1 | Sept 9 | L0 | 0.5h | T-001 | done (YES, 09-08) |
