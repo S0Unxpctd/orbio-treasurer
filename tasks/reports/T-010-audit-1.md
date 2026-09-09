@@ -5,6 +5,8 @@ Files in diff: `packages/core/src/mcp/{client,schemas,token-store,balance-chain,
 
 **Bottom line: solid on secrets/shape/time/idempotent-rotation. One Major: concurrent token refresh is not single-flighted, unlike `rotateKey()` — reproduced live against the actual code (2 refresher calls + a spurious `MCP_UNAVAILABLE` for 2 concurrent tool calls that both see a near-expired/401'd token). Send back to `in-code`.**
 
+**Counts: 0 Blocker · 1 Major · 1 Minor · 2 Questions.** (Correction: my chat reply reporting this pass out-of-band said "1 Blocker" — that was wrong/inconsistent with this report's own findings below, which contain zero Blocker-tagged items; the number above is the correct one.)
+
 ## What I checked (one line per §4 item)
 
 **Correctness against PRD**
@@ -73,3 +75,29 @@ Did not make any live MCP calls (not needed to reach a verdict; the two Question
 ## Recommended status
 
 **in-code** — one Major (concurrent refresh race, reproduced) must be fixed before Test. The Minor and two Questions don't block but should be addressed/answered in the same pass.
+
+### Audit pass 2 (2026-09-09)
+
+Fix commit audited: `3ddafa7` (`fix(mcp): single-flight token refresh, fail-closed store save, redacted shape samples [T-010]`).
+
+**Major (concurrent refresh) — verified fixed, re-run with my OWN repro, not the builder's test.** Rewrote and reran the pass-1 scratch test (not committed, deleted after the run) against the fixed code, three scenarios:
+- Two concurrent `callTool()`s both hitting 401 → `oauthRefresher.refresh()` called **exactly once** (was 2); both calls fulfilled, no spurious `MCP_UNAVAILABLE`.
+- Two concurrent calls both seeing a near-expiry token (proactive path, no 401 at all) → refresher called **exactly once**; both fulfilled. This exercises `ensureFreshToken()`'s proactive branch specifically, which pass 1's repro didn't cover — same single-flight guard (`tryRefresh()`/`refreshPromise`) protects both call sites, confirmed.
+- Traced why single-flight is race-safe under real JS semantics (not just "the map/promise happens to work in tests"): `tryRefresh()` is a plain (non-`async`) method — the `refreshPromise !== null` check and the `this.refreshPromise = attempt` assignment are both synchronous, with no `await` between them, so two concurrent callers reaching `await this.tryRefresh()` can never both observe `null`; whichever call's synchronous JS turn reaches it first sets the field before yielding control back to the event loop for the other to run. Confirmed against the actual code, not just asserted from reading it.
+
+**`tokenStore.save()` failure — fail-closed, verified with my own repro (3rd scenario in the same file):**
+- Old pair is genuinely kept: `this.tokens` never reassigned when `save()` throws — proved by asserting the transport is constructed with `'orig-access'` (the pre-refresh token) on both the failing-refresh call *and* a second call afterward, not a new unpersisted token.
+- No re-send unless a genuine 401: after the failed save, `refreshTokenConsumedLocally` is set, so a second call that is *still* near-expiry (no 401 involved) makes **zero** further `refresh()` calls (`refreshCalls` stayed at 1 across two calls) — confirmed this is a real gate, not merely "it happened not to fire again in this test." The one call to `oauthRefresher.refresh()` that does happen always sends the OLD `refresh-token` (asserted in the mock), matching "the new pair is never adopted before a durable write."
+- Matches the ticket's own P-1 note ("refresh failure → estimate + MCP_UNAVAILABLE once per state entry, the refresh token then needs one human re-auth"): a save failure after a successful server rotation is exactly the scenario that forces a human re-auth eventually (the burnt refresh token can never be used again), and the fix correctly avoids making that worse by hammering the token endpoint every call in the meantime.
+
+**Minor (unredacted `err.message` in docs-append) — verified fixed.** `schemas.ts`'s `recordUnrecognizedSample()` now wraps the interpolated message in `redact()` (diff confirmed, `redact(err.message)` in place of the bare `err.message`). No dedicated test was added for this one-line change — acceptable; the fix is trivially correct by inspection and, per the pass-1 finding itself, meaningfully exercising it would require a schema whose validation message echoes a raw secret, which zod's own format doesn't do today.
+
+**No I/O added/changed beyond the existing `appendFile` in `schemas.ts` (pre-existing, unchanged call site) — grepped `client.ts`/`schemas.ts` for `writeFile|appendFile|readFile|fetch(|localStorage`, nothing new.**
+
+**No token leak in the new tests or full-suite output** — grepped the fixture-doubles' secrets across a fresh full `pnpm test` capture: zero matches. New tests (`mcp-client.test.ts` "single-flighted token refresh under concurrency" describe block, 3 tests) read cleanly — assert on call counts/log content, never print a real-looking secret.
+
+**Regressions: none.** `pnpm test` → **805 passed, 52 skipped** (18 files passed, 2 skipped: postgres suite, opt-in live MCP suite) — exactly the expected count (802 + 3 new pass-2 tests). `pnpm lint`/`pnpm typecheck` clean (same one pre-existing, unrelated `turbo.json`/probe-script warning as pass 1).
+
+### Recommended status (pass 2)
+
+**in-test** — the Major is fixed and independently reproduced as fixed (both refresh paths, save-failure fail-closed behavior); the Minor is fixed by inspection. The two pass-1 Questions (KEY_ROTATE decision-row persistence scope, text-only-response hard-failure) were not addressed by this fix commit — they were never blocking, so this doesn't hold up Test, but they still need a one-line answer from So/next ticket owner before this is fully closed out.
