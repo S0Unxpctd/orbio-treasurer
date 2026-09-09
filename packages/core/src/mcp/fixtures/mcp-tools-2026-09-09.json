@@ -1,0 +1,111 @@
+{
+  "recorded_at": "2026-09-09T02:41:02.063Z",
+  "tools": [
+    {
+      "name": "orbio_get_balance",
+      "description": "Read the Orbio credit balance for the connected account: what it has earned from holding $ORBIO, what it has bought, what it has spent through the gateway, and what is spendable now. Credits accrue every hour from trading fees, so this figure grows on its own. The balance is the quota: an Orbio key spends exactly this and no more.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "orbio_get_key_status",
+      "description": "Read the account's Orbio key: whether one exists, its visible head, when it was created and last used. The secret is returned only once, by orbio_create_key, and can never be read back. The key has no limit of its own; it spends the balance from orbio_get_balance. Also reports a legacy OpenRouter key if the account still holds one from before the gateway.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "orbio_create_key",
+      "description": "Mint the Orbio key that spends the account balance through the gateway. The secret is in this response and nowhere else, ever: store it where the agent keeps credentials before doing anything else. If a key already exists it is retired in the same statement, so this is also how a leaked key is replaced. There is no amount to choose: the key spends existing credits first, then deposited dollars at the current rate, request by request.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Optional name, up to 60 characters, e.g. the machine it lives on."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "orbio_revoke_key",
+      "description": "Stop the Orbio key on the next request and leave the account with none. The balance is untouched — the key never held credit, it only spent it — so nothing is refunded and nothing is lost. Create another whenever one is wanted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "orbio_delete_key",
+      "description": "Disable a provisioned OpenRouter key from before the gateway and return whatever it had not spent to the account balance, where the Orbio key spends it. Nothing mints these any more, so this is a one-way clean-up. It cannot be undone: the disabled key never works again. Accounts that never claimed one have nothing to delete.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  ],
+  "orbio_get_balance": {
+    "content": [
+      {
+        "type": "text",
+        "text": "$100.82 spendable now — $100.82 earned, $0.00 bought, $0.00 deposited, $0.00 spent through the gateway."
+      }
+    ],
+    "structuredContent": {
+      "wallets": ["0x3ce22a…9e7f"],
+      "accrued": {
+        "usd": 100.816236,
+        "microUsd": "100816236"
+      },
+      "purchased": {
+        "usd": 0,
+        "microUsd": "0"
+      },
+      "deposited": {
+        "usd": 0,
+        "microUsd": "0"
+      },
+      "depositBalance": {
+        "usd": 0,
+        "microUsd": "0"
+      },
+      "depositFrozen": false,
+      "spent": {
+        "usd": 0.000001,
+        "microUsd": "1"
+      },
+      "claimed": {
+        "usd": 0,
+        "microUsd": "0"
+      },
+      "balance": {
+        "usd": 100.816235,
+        "microUsd": "100816235"
+      }
+    }
+  },
+  "orbio_get_key_status": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Orbio key sk-orbio-…, created 2026-09-08T23:30:46.566123+00:00, last used 2026-09-08T23:47:01.086736+00:00. It spends the balance directly; base URL https://api.orbio.so/api/v1."
+      }
+    ],
+    "structuredContent": {
+      "hasKey": true,
+      "prefix": "sk-orbio…[last4]",
+      "createdAt": "2026-09-08T23:30:46.566123+00:00",
+      "lastUsedAt": "2026-09-08T23:47:01.086736+00:00",
+      "baseUrl": "https://api.orbio.so/api/v1",
+      "legacy": null
+    }
+  }
+}
