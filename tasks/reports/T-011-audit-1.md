@@ -83,3 +83,79 @@ Fix is small (wrap the 5 read sites in `JSON.parse` guarded for null, mirroring 
 ## Status
 
 `in-code` — one Blocker (B1) outstanding.
+
+---
+
+# Audit pass 2 (2026-09-09)
+
+Fix commit reviewed: `9984e62` "fix(ledger): parse jsonb in Postgres store, audit-1 minors
+[T-011]". `git show 9984e62 --stat`: `packages/core/src/ledger/postgres/store.ts` (+22/-4),
+`packages/core/src/ledger/types.ts` (+2), `packages/core/src/ledger/util.ts` (+1/-6),
+`tasks/T-011.md` (build notes/Discovered/Evidence updates). Nothing outside those four files —
+no scope creep.
+
+## B1 — re-verified live
+
+Fresh local Postgres 16 cluster, same recipe as pass 1 (`initdb`/`pg_ctl` on
+`127.0.0.1:55434`, loopback only, no outbound network):
+
+```
+TEST_DATABASE_URL=postgres://postgres@127.0.0.1:55434/orbio_t011_pass2 \
+  pnpm --filter @orbio-treasurer/core test -- --run
+
+ Test Files  13 passed (13)
+      Tests  253 passed (253)
+```
+
+253/253, 0 skipped — up from 251/253 in pass 1. Verbose re-run of
+`ledger-conformance.test.ts` confirms the exact two previously-failing tests now pass under
+`ledger conformance — postgres`:
+
+```
+ ✓ ledger conformance — postgres > decisions: insert round-trips inputs/action/result and the executed/public flags
+ ✓ ledger conformance — postgres > book_snapshots: insert round-trips (no agent_id — global book state)
+ Test Files  1 passed (1)
+      Tests  38 passed (38)
+```
+
+The one jsonb path pass 1 flagged as untested-by-any-assertion — `agents.policy` with a
+non-null value — isn't covered by the conformance suite either (pre-existing gap, not
+introduced by this fix), so I checked it directly against the built store:
+
+```js
+const agent = await store.insertAgent({ ..., policy: { maxBuy: 10, tiers: ['a','b'] } });
+// typeof agent.policy: object {"maxBuy":10,"tiers":["a","b"]}
+const fetched = await store.getAgent(agent.id);
+// typeof fetched.policy: object {"maxBuy":10,"tiers":["a","b"]}
+```
+
+Correctly parsed both on insert-return and on a subsequent read. `fromJsonb()`'s
+pass-through-if-already-an-object branch is defensive but harmless — not exercised by
+postgres.js's actual (string) behavior, doesn't change anything.
+
+Cluster torn down after the run (`pg_ctl stop`, data dir removed) — no state left behind.
+
+## M1 / M2 — re-checked
+
+- M1: `nowUtcIso()` and its now-dangling `IsoTimestamp` import removed from `util.ts`. Grepped
+  the whole repo — zero remaining references outside the stale compiled `dist/*.d.ts` (not
+  source, rebuilds on next `pnpm build`). Fixed.
+- M2: `LedgerStore.dialect` kept — reasonable, it's a legitimate debug/logging tag — now with an
+  explicit doc comment on the interface that application code must never branch on it. That's
+  the right resolution (removing the field would lose real debugging value; the risk was always
+  about *future* branching on it, which the comment now calls out), not a re-open.
+
+## Regressions / side effects
+
+- Re-ran `pnpm lint && pnpm typecheck` — unchanged, still clean (same pre-existing unrelated
+  lint warning in `scripts/probes/p1-mcp-auth.ts`, untouched by this fix).
+- Re-ran `pnpm --filter @orbio-treasurer/core test` with `TEST_DATABASE_URL` unset — 211
+  passed / 42 skipped, byte-identical to pass 1's pre-fix baseline. The skip path (kit/CI
+  without a Postgres) is unaffected by the fix, as expected.
+- No new dependencies, no changes to `packages/core/src/ledger/sqlite/**`, `decimal.ts`, or
+  `metrics.ts` — the fix is scoped exactly to what pass 1 named.
+
+## Status
+
+`in-test` — B1, M1, M2 all closed and independently re-verified against a real (local) Postgres
+cluster. Q1 (ε default) remains open for So, as expected — it was never a blocking item.
