@@ -1,0 +1,46 @@
+{
+  "probe": "P-3",
+  "date": "2026-09-09",
+  "method": "curl, no auth, no cookies, GET only, <=30 requests, 1s apart",
+  "verdict": "NO dedicated/stable JSON endpoint found",
+  "endpoints_tried": [
+    { "url": "https://www.orbio.so/robots.txt", "status": 404, "content_type": "text/html; charset=utf-8", "note": "Next.js catch-all 404 page, not a real robots.txt" },
+    { "url": "https://www.orbio.so/sitemap.xml", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://www.orbio.so/", "status": 200, "content_type": "text/html; charset=utf-8", "note": "SSR app-router page; book/sales data embedded in RSC payload, see embedded_data_sample below" },
+    { "url": "https://www.orbio.so/api/book", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://www.orbio.so/api/orders", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://www.orbio.so/api/market", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://www.orbio.so/api/listings", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://www.orbio.so/api/credits", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://www.orbio.so/api/sales", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://www.orbio.so/api/orderbook", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://api.orbio.so/api/v1/book", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://api.orbio.so/api/v1/orders", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://api.orbio.so/api/v1/market", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://api.orbio.so/api/v1/listings", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://api.orbio.so/api/v1/credits", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://www.orbio.so/book", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://www.orbio.so/market", "status": 404, "content_type": "text/html; charset=utf-8" },
+    { "url": "https://www.orbio.so/credits", "status": 308, "content_type": "text/plain", "note": "redirects to /  (no separate credits/book page; the homepage IS the book page)" },
+    { "url": "https://www.orbio.so/leaderboard", "status": 308, "content_type": "text/plain", "note": "redirects to https://sellers.orbio.so/leaderboard" },
+    { "url": "https://sellers.orbio.so/", "status": 404, "content_type": "text/html; charset=utf-8", "note": "app root not-found; app is routed, likely behind auth for non-leaderboard pages" },
+    { "url": "https://sellers.orbio.so/leaderboard", "status": 200, "content_type": "text/html; charset=utf-8", "note": "public, same SSR pattern as www; not the book/market page" },
+    { "url": "https://sellers.orbio.so/robots.txt", "status": 404, "content_type": "text/html; charset=utf-8" }
+  ],
+  "csp_evidence": {
+    "source": "www.orbio.so response header content-security-policy-report-only",
+    "connect_src": "'self' https://auth.privy.io wss://relay.walletconnect.com wss://relay.walletconnect.org wss://www.walletlink.org https://*.rpc.privy.systems https://explorer-api.walletconnect.com https://api.tolt.io https://api.tolt.com https://files.tlt-cdn.com",
+    "interpretation": "no api.orbio.so or any book/market host is allow-listed for client-side fetch/XHR; the browser never calls out to a separate JSON API for book data, consistent with the data being server-rendered only"
+  },
+  "embedded_data_sample_redacted": {
+    "source": "GET https://www.orbio.so/ — data is inline inside a Next.js RSC payload (self.__next_f.push([...])), not a separate HTTP response",
+    "shape_observed": "array of recent settled sales, each { label: string (partially-redacted email, source-masked by Orbio itself), creditMicroUsd: string, discountBps: number, settledAt: ISO8601 }",
+    "example_redacted": [
+      { "label": "***@***.***", "creditMicroUsd": "20000000", "discountBps": 6462, "settledAt": "2026-09-08T14:43:25.110246+00:00" },
+      { "label": "***@***.***", "creditMicroUsd": "50000000", "discountBps": 6374, "settledAt": "2026-09-08T01:51:06.06012+00:00" },
+      { "label": "***@***.***", "creditMicroUsd": "25000000", "discountBps": 6997, "settledAt": "2026-09-08T00:35:48.242623+00:00" }
+    ],
+    "also_present": "one headline figure '$N,NNN credits available' rendered server-side; no per-model breakdown, no depth-at-2%-steps curve, no listings array was found anywhere on the page — FR-5.2's book shape (best discount, depth, total USD per model) is NOT present, only an aggregate total and a flat recent-sales feed",
+    "why_this_is_not_a_stable_json_source": "this is React Server Component internal wire format (numbered chunks, backreference paths like '$6:0:props:children:...'), undocumented, tied to the exact Next.js build/deploy, not a versioned or announced contract; extracting it means regex-scraping full page HTML on every read, not calling an endpoint"
+  }
+}

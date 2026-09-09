@@ -6,6 +6,7 @@ Everything learned about Orbio's real interfaces, appended as learned, with date
 
 - MCP endpoint: `https://www.orbio.so/api/mcp` (Streamable HTTP, OAuth). Install: `claude mcp add --transport http --scope user orbio https://www.orbio.so/api/mcp`, then authenticate.
 - MCP tools: `orbio_get_balance`, `orbio_create_key`, `orbio_get_key_status` (usage and remaining quota at OpenRouter pricing), `orbio_revoke_key` (halts on next request, balance untouched). A second `orbio_create_key` replaces a leaked key while keeping the balance.
+- MCP tool list observed 2026-09-09 (probe P-3 session): `orbio_get_balance`, `orbio_get_key_status`, `orbio_create_key`, `orbio_revoke_key`, `orbio_delete_key` — **`orbio_delete_key` is new** since 2026-09-07/08 (not previously listed above); behavior not yet probed, presumably removes a revoked key's record rather than just halting it.
 - Fee → credit: "50% of every fee $ORBIO collects is converted into OpenRouter credits and distributed to holders"; "split by time-weighted balance across each window"; windows are hourly.
 - Sellers site: list an OpenRouter key with a credit limit; discount 10–80% in 2% steps; "deeper sells first"; paid "the price less your discount" per request served; claim ≥ $5; 7-day settlement via Whop; first-month cap $200 across keys. Holder surplus: "paid in USDG within minutes of a sale".
 - Chain: Robinhood Chain (Blockscout explorer, links on the leaderboard). Leaderboard: `https://www.orbio.so/leaderboard` — top addresses and all-time distributed total.
@@ -16,13 +17,23 @@ Everything learned about Orbio's real interfaces, appended as learned, with date
 1. ~~Book write API?~~ Answered 2026-09-08: no (see Answers).
 2. Is the $100 grant on a separate key/balance from holder credits? (asked 2026-09-07)
 2b. Infra facts learned 2026-09-08: Supabase direct DB host is IPv6-only (unreachable from the cloud sandbox) → use the **Session pooler** URI (`aws-x-<region>.pooler.supabase.com:5432`, user `postgres.<ref>`) in `DATABASE_URL`. The sandbox's git proxy refuses pushes to repos not registered as session sources → So pushes from his Mac (git bundle) or adds the repo to the session's sources. X API console is now `console.x.com`, plan **Pay Per Use** (no free tier); keys come from Default Project → Voir les apps → Keys and tokens.
-3. Read endpoint for the book, or may we use the page's JSON endpoint? (asked 2026-09-08, gates probe P-3)
+3. ~~Read endpoint for the book, or may we use the page's JSON endpoint?~~ Answered 2026-09-09: no (see Probe results, P-3). Follow-up: is there a planned read-only JSON endpoint for the book, or keep scraping the homepage's embedded sales feed?
 4. Is listing holder surplus agentic today? (asked 2026-09-08)
 5. Is there (or could there be) an API to list a credit-limited OpenRouter key on the book? OpenRouter provisioning keys make the key side agentic; the listing side is the gap. (to ask — v2 sell side)
 
 ## Probe results (PRD §13a)
 
 _(P-1 … P-8: date, yes/no, evidence, default set)_
+
+### P-3 · Book read source — **NO** (2026-09-09)
+
+- Method: curl, no auth, no session cookies, GET only, ~26 requests total, 1s apart, ≤30min. Checked `robots.txt`/`sitemap.xml`, homepage HTML/RSC payload, `/api/{book,orders,market,listings,credits,sales,orderbook}` on `www.orbio.so`, `/api/v1/{book,orders,market,listings,credits}` on the gateway (`api.orbio.so`), and dedicated pages (`/book`, `/market`, `/credits`, `/leaderboard`). All `/api/*` and page candidates → **404** (Next.js catch-all HTML, not JSON). `GET /credits` → 308 redirect to `/` (no separate book page; the homepage *is* the book page). `GET /leaderboard` → 308 to `https://sellers.orbio.so/leaderboard` (200, public, but that's the leaderboard, not the book).
+- **`www.orbio.so/` (GET, 200, no auth) does embed real book/sales data**, but only inside the page's Next.js RSC payload (`self.__next_f.push(...)`), not as a separate response: a flat "recent settled sales" feed — `{ label (source-masked email), creditMicroUsd, discountBps, settledAt }` per sale — plus one headline "$N,NNN credits available" figure. No per-model breakdown, no depth-at-2%-steps curve, no listings array anywhere on the page: **FR-5.2's target `BookView` shape (best discount, depth, total USD per model) is not present**, only an aggregate total + flat sales feed.
+- This embedded data is React Server Component wire format (numbered chunks, internal backreference paths), undocumented and tied to the exact Next.js build — not a versioned/announced contract. Reading it means regex-scraping the full homepage HTML on every tick, not calling an endpoint.
+- CSP evidence (response header on `www.orbio.so`, report-only): `connect-src` allow-lists only `'self'`, Privy, WalletConnect, and Tolt (affiliate) — **no `api.orbio.so` or any book/market host**, confirming the browser itself never calls out to a separate JSON API for book data.
+- Fixture (redacted): `packages/core/src/book/fixtures/p3-2026-09-09.json` — full endpoint/status matrix, CSP evidence, and a redacted sample of the embedded sales-feed shape.
+- **Default set: `BOOK read = none`.** Per FR-5.2, L1 degrades to "no book data"; the X post drops the book lines this week.
+- Question for Yash: is there (or will there be, alongside the agentic-buy endpoint) a read-only JSON endpoint for the book/order-depth, or should we keep scraping the homepage's embedded sales feed as a best-effort signal?
 
 ### P-2 · Gateway key-info / credits endpoint — **NO** (2026-09-08, curl with the real key)
 
