@@ -24,6 +24,12 @@ Updated every evening by So after the merge. The judges may read this; keep it f
 - Awaiting So: sign-off T-001/T-002/T-003; ADR-004 rule; GitHub push (CI link); Supabase/Vercel projects; X app; pool link; verify `cron.job` on real Supabase (AC4 of T-002).
 - Tomorrow (Sept 9, D1): probes P-1…P-8 first (need So's MCP token + Orbio key in env), then T-010, T-011, T-012, T-014.
 
+## Day 1 (morning) — 2026-09-09
+
+- So signed off T-001/T-002/T-003 and ratified ADR-004. Repo on GitHub (`S0Unxpctd/orbio-treasurer`); sandbox can fetch but not push yet (repo not in the session's sources) → bundles until fixed.
+- Supabase project live: migrations 001–004 applied through the Management API (sandbox has HTTPS only); 7 tables, 6 policies, 7 triggers, pg_cron 1.6.4 + pg_net 0.20.4, `treasurer-tick` scheduled `*/15 * * * *` (errors harmlessly until `app.tick_url` is set once Vercel exists). T-002 AC4 closed.
+- Next: P-1 (MCP OAuth, with So), T-011 LedgerStore on Sonnet, T-010, T-012, T-014.
+
 ## Template for each day
 
 ```
