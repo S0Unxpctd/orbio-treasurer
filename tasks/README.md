@@ -6,9 +6,9 @@ Tickets follow `PROCESS.md`. Status lives inside each ticket; this table is upda
 | Ticket | Title | Day | Date | Layer | Est | Depends on | Status |
 |---|---|---|---|---|---|---|---|
 | **D0 — docs, accounts, X app, pool link (nothing depends on Orbio)** | | | Sept 8 | | | | |
-| [T-001](T-001.md) | Monorepo scaffold, tooling, CI | 0 | Sept 8 | L0 | 2h | — | todo |
-| [T-002](T-002.md) | Ledger schema (both dialects), RLS, append-only triggers, cron SQL | 0 | Sept 8 | L0 | 3.5h | T-001 | todo |
-| [T-003](T-003.md) | redact() + structured logger | 0 | Sept 8 | L0 | 1.5h | T-001 | todo |
+| [T-001](T-001.md) | Monorepo scaffold, tooling, CI | 0 | Sept 8 | L0 | 2h | — | done |
+| [T-002](T-002.md) | Ledger schema (both dialects), RLS, append-only triggers, cron SQL | 0 | Sept 8 | L0 | 3.5h | T-001 | done |
+| [T-003](T-003.md) | redact() + structured logger | 0 | Sept 8 | L0 | 1.5h | T-001 | done |
 | **D1 — PROBES FIRST (P-1…P-8), then data flowing** | | | Sept 9 | | | | |
 | [P-001](P-001.md) | Probe P-1 · MCP headless auth | 1 | Sept 9 | L0 | 0.5h | T-001 | todo |
 | [P-002](P-002.md) | Probe P-2 · Gateway key-info endpoint | 1 | Sept 9 | L0 | 0.5h | T-001 | todo |

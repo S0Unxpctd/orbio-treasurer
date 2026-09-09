@@ -1,6 +1,6 @@
 # ADR-004 · Scaffold-time deviations from ADR-001: Next.js 16, `tsx`
 
-2026-09-08 · accepted (pending So's ok in T-001 Sign-off)
+2026-09-08 · accepted · ratified by So 2026-09-09 (T-001 Sign-off)
 
 ## Context
 ADR-001 named Next.js 15. At scaffold time (T-001) the current stable major is 16.3; same framework, same App Router and Route Handlers. The scaffold also added `tsx` (root, for `pnpm probe`; book-daily, for `tsx watch` in dev) which is not on the ARCHITECTURE §1 list. The T-001 audit flagged both as process deviations: the allowlist must not be edited to match what was installed.
