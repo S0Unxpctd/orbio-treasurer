@@ -10,7 +10,7 @@ Tickets follow `PROCESS.md`. Status lives inside each ticket; this table is upda
 | [T-002](T-002.md) | Ledger schema (both dialects), RLS, append-only triggers, cron SQL | 0 | Sept 8 | L0 | 3.5h | T-001 | done |
 | [T-003](T-003.md) | redact() + structured logger | 0 | Sept 8 | L0 | 1.5h | T-001 | done |
 | **D1 — PROBES FIRST (P-1…P-8), then data flowing** | | | Sept 9 | | | | |
-| [P-001](P-001.md) | Probe P-1 · MCP headless auth | 1 | Sept 9 | L0 | 0.5h | T-001 | todo |
+| [P-001](P-001.md) | Probe P-1 · MCP headless auth | 1 | Sept 9 | L0 | 0.5h | T-001 | in-test (script ready; run with So) |
 | [P-002](P-002.md) | Probe P-2 · Gateway key-info endpoint | 1 | Sept 9 | L0 | 0.5h | T-001 | todo |
 | [P-003](P-003.md) | Probe P-3 · Book read source | 1 | Sept 9 | L1 | 0.5h | T-001 | todo |
 | [P-004](P-004.md) | Probe P-4 · Per-call cost from gateway | 1 | Sept 9 | L0 | 0.5h | T-001 | todo |
@@ -19,7 +19,7 @@ Tickets follow `PROCESS.md`. Status lives inside each ticket; this table is upda
 | [P-007](P-007.md) | Probe P-7 · Stake pool on Robinhood Chain | 1 | Sept 9 | L2a | 0.5h | T-001 | todo |
 | [P-008](P-008.md) | Probe P-8 · pg_cron → Vercel round trip | 1 | Sept 9 | L0 | 0.5h | T-002, P-005 | todo |
 | [T-010](T-010.md) | OrbioMcpClient + balance fallback chain | 1 | Sept 9 | L0 | 3.5h | T-002, T-003, P-001, P-002 | todo |
-| [T-011](T-011.md) | LedgerStore interface + SQLite and Postgres implementations | 1 | Sept 9 | L0 | 4.5h | T-002 | todo |
+| [T-011](T-011.md) | LedgerStore interface + SQLite and Postgres implementations | 1 | Sept 9 | L0 | 4.5h | T-002 | done (pending So) |
 | [T-012](T-012.md) | BookClient interface + ReadOnlyBookClient (conditional on P-3) | 1 | Sept 9 | L1 | 2.5h | T-003, P-003 | todo |
 | [T-014](T-014.md) | tick(): snapshot pipeline in dry_run + cron route | 1 | Sept 9 | L0 | 3h | T-010, T-011, T-012, P-005, P-008 | todo |
 | **D2 — policy, executors, metering, L2b mock (dry-run running)** | | | Sept 10 | | | | |
