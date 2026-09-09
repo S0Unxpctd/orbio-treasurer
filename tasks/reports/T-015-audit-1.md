@@ -142,3 +142,72 @@ default indefinitely.
 ## Status
 
 `in-code` — three Majors (M1, M2, M3) outstanding; no Blockers.
+
+---
+
+### Audit pass 2 (2026-09-09)
+
+Fix commit reviewed: `f2549e7` "fix(policy): unfunded alert edge, §10 option selection [T-015]".
+`git show f2549e7 --stat`: `evaluate.ts`, `evaluate.test.ts`, `property.test.ts`,
+`rules/deficit.ts`, `types.ts`, `tasks/T-015.md`. Nothing outside `policy/` and the ticket file —
+no scope creep in the fix itself.
+
+**M1 (`ALERT_DEFICIT_UNFUNDED` entry-vs-DEFICIT-entry gap) — fixed, re-verified independently.**
+New `HysteresisInput.previouslyUnfundedInDeficit: boolean | null` mirrors
+`tick.mcpPreviouslyReachable`'s own convention exactly (`true`/`false`/`null`-for-no-prior-tick).
+`evaluate.ts`'s gate changed from `if (enteredState)` to
+`if (input.hysteresis.previouslyUnfundedInDeficit !== true)`. I re-ran 3 independent cases
+against the shipped code (not the builder's), targeting exactly the gap I found in pass 1:
+- **A** — continuing DEFICIT, `previouslyUnfundedInDeficit: false` (was funded last tick, just
+  lost its option) → `ALERT_DEFICIT_UNFUNDED` **fires**. This is the exact scenario that was
+  silently dropped in pass 1; confirmed fixed.
+- **B** — continuing DEFICIT, `previouslyUnfundedInDeficit: true` (already unfunded) → alert
+  does **not** re-fire; dedup still intact, no regression to the "once" part of "once per entry."
+- **C** — `previouslyUnfundedInDeficit: null` (no prior tick) → counts as a fresh entry, fires —
+  matches `mcpPreviouslyReachable`'s own null convention, consistent design.
+Closed.
+
+**M2 (`BUY_CREDIT` preferred whenever present, no `need`-coverage gate) — fixed as arbitrated
+("implement §10 literally"), re-verified independently.** `pickDeficitOption(options, needUsd)`
+now takes `need` and only selects `BUY_CREDIT` when `parseDecimal(buy.action.usd) >= need`;
+otherwise falls through to `STAKE_UP` (already gated by its own payback check), else `null`
+(caller emits `SIGNAL_FUND`). Re-ran 3 independent cases with numbers of my own choosing:
+- **D** — `need=25`, `BUY_CREDIT` present but capped at budget `10` (partial, doesn't cover),
+  `STAKE_UP` present and qualifies (payback ≈1d) → `STAKE_UP` chosen, `BUY_CREDIT` not emitted.
+- **E** — same partial `BUY_CREDIT`, `STAKE_UP` unavailable → `SIGNAL_FUND` for the full `need`
+  (`25.000000`), neither funding action emitted — confirms no silent fallback to the partial buy.
+- **F** — boundary case, `budget == need` exactly (`10 == 10`) → still chosen (`>=`, not `>`),
+  correctly reading "covers" as inclusive of an exact match.
+This is §10's literal text implemented without a manufactured cost formula, and I agree with the
+arbitration that ADR-003's "by cost" is reasonably satisfied by `STAKE_UP`'s own
+`stake_payback_max_days` gate rejecting any option too slow to be worth it — there is no PRD
+number for a BUY-vs-STAKE $-for-$ cost comparison to build against anyway. Closed, no residual
+concern.
+
+**M3 (FR-4.8 scope)** — resolved by arbitration as a ticket-header fix (`PRD:` line now reads
+`FR-4.1..FR-4.8`, "per PRD 0.3.1", `tasks/T-015.md:3,89`). Not a code question; nothing to
+re-verify beyond confirming the header actually changed, which it has. Closed.
+
+**FR-4.6 reproducibility with the new field** — re-checked independently (not reusing the
+builder's property-test update): built a `Decision.inputs` with
+`previouslyUnfundedInDeficit: false` triggering the M1 alert path, confirmed
+`evaluate(decision.inputs)` reproduces the identical `Decision[]` for every emitted decision,
+including through a `JSON.parse(JSON.stringify(...))` round-trip (independent object, not
+reference equality). Holds.
+
+**I/O / float** — re-grepped `policy/**` (`node:`, `fs`, `fetch`, `Date.now`, `new Date`,
+`Math.random`, `process.env`, `Number(`, `parseFloat`, `.toFixed(`): zero hits, including in the
+new `previouslyUnfundedInDeficit` plumbing. Clean.
+
+**Regressions** — `pnpm lint && pnpm typecheck`: clean (same pre-existing biome-migration notice
+and unrelated probe-script turbo-env info, neither in `policy/`). `pnpm test`: **481 passed / 50
+skipped** — up from 476, +5 matches the fix commit's net new test count exactly (128 lines added
+to `evaluate.test.ts` include several `it.each`/`describe` restructurings, not just new cases, so
++5 net rather than the raw diff size). No other package's count changed.
+
+### Status (pass 2)
+
+`in-test` — M1 and M2 verified fixed against independently-authored cases; M3 resolved by
+ticket-header arbitration. No Blockers, no Majors outstanding. The three pass-1 Minors (AC1
+coverage tooling, `bestDiscountPct` unit vs. real `discountBps`, `prebuyReserveUsd` default)
+were not in scope for this fix and remain open for So, as before — none block `in-test`.
