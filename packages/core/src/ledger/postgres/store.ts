@@ -19,6 +19,12 @@
  * so the LedgerStore contract (`IsoTimestamp = string`, UTC, ending in "Z") holds regardless.
  * Money/token-amount (`numeric`) columns are returned by postgres.js as decimal strings by
  * default (ADR-005) — never coerced through a JS `number`, so no float ever touches them.
+ *
+ * jsonb columns (`agents.policy`, `decisions.inputs`/`action`/`result`, `book_snapshots.view`):
+ * postgres.js does not parse these into JS values by default — it hands back the raw JSON text
+ * (confirmed against a real Postgres cluster, audit pass 1 / T-011.md). `fromJsonb` below parses
+ * explicitly (tolerating an already-parsed value too, in case that ever changes upstream) so
+ * this store's `unknown` return shape actually matches SqliteLedgerStore's, not a JSON string.
  */
 import postgres from 'postgres';
 import { normalizeMoney, normalizeTokenAmount } from '../decimal.js';
@@ -59,6 +65,12 @@ function toIsoOrNull(value: unknown): string | null {
 function toJsonbLiteral(value: unknown): string | null {
   return value === undefined || value === null ? null : JSON.stringify(value);
 }
+/** Parses a jsonb column's value back into the JS value it was stored from. See file header. */
+function fromJsonb(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return JSON.parse(value);
+  return value;
+}
 
 // --- row mappers: raw postgres.js rows -> LedgerStore rows ---
 
@@ -72,7 +84,7 @@ function mapAgentRow(r: Row): AgentRow {
     repoUrl: (r.repo_url as string | null) ?? null,
     xHandle: (r.x_handle as string | null) ?? null,
     template: (r.template as string | null) ?? null,
-    policy: r.policy ?? null,
+    policy: fromJsonb(r.policy),
     mode: r.mode as AgentRow['mode'],
     agentTokenHash: (r.agent_token_hash as string | null) ?? null,
     public: r.public as boolean,
@@ -146,10 +158,10 @@ function mapDecisionRow(r: Row): DecisionRow {
     ruleId: (r.rule_id as string | null) ?? null,
     stateBefore: (r.state_before as string | null) ?? null,
     stateAfter: (r.state_after as string | null) ?? null,
-    inputs: r.inputs ?? null,
-    action: r.action ?? null,
+    inputs: fromJsonb(r.inputs),
+    action: fromJsonb(r.action),
     executed: r.executed as boolean,
-    result: r.result ?? null,
+    result: fromJsonb(r.result),
     human: (r.human as string | null) ?? null,
     public: r.public as boolean,
     createdAt: toIso(r.created_at),
@@ -161,7 +173,7 @@ function mapBookSnapshotRow(r: Row): BookSnapshotRow {
     id: r.id as Id,
     at: toIso(r.at),
     source: r.source as BookSnapshotRow['source'],
-    view: r.view ?? null,
+    view: fromJsonb(r.view),
     totalAvailableUsd: (r.total_available_usd as string | null) ?? null,
     bestDiscountPct: (r.best_discount_pct as string | null) ?? null,
     createdAt: toIso(r.created_at),

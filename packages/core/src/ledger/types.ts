@@ -295,6 +295,8 @@ export class NotFoundError extends Error {
 }
 
 export interface LedgerStore {
+  /** Debug/logging tag only (audit pass 1 M2) — application code must never branch on this; a
+   *  `store.dialect === 'postgres'` conditional in app code would be the real dialect leak. */
   readonly dialect: 'sqlite' | 'postgres';
 
   insertAgent(row: NewAgent): Promise<AgentRow>;

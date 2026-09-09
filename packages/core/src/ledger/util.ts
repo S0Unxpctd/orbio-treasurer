@@ -7,7 +7,7 @@
  * behaviour that could leak above the LedgerStore interface (T-011 Audit focus).
  */
 import { randomUUID } from 'node:crypto';
-import type { Id, IsoTimestamp } from './types.js';
+import type { Id } from './types.js';
 
 export function newId(): Id {
   return randomUUID();
@@ -27,9 +27,4 @@ export function assertUtcIso(value: string, field: string): void {
       `${field} must be a UTC ISO-8601 timestamp ending in "Z", got: ${JSON.stringify(value)}`,
     );
   }
-}
-
-/** Current instant as a UTC ISO-8601 string. The one place a store may read the clock. */
-export function nowUtcIso(): IsoTimestamp {
-  return new Date().toISOString();
 }
