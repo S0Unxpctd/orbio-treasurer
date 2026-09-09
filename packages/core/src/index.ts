@@ -67,3 +67,43 @@ export type {
   UsageEventRow,
 } from './ledger/types.js';
 export { NotFoundError } from './ledger/types.js';
+// T-010: OrbioMcpClient, token refresh/rotation, balance chain mcp -> estimate.
+export type {
+  BalanceSourceResult,
+  BalanceStructuredContent,
+  Clock,
+  EstimateInput,
+  KeyRotateResult,
+  KeyStatusStructuredContent,
+  McpBalanceReader,
+  McpContentBlock,
+  McpTokenPair,
+  McpTokenStore,
+  McpToolCallResult,
+  McpToolName,
+  McpTransport,
+  McpTransportFactory,
+  OAuthRefresher,
+  OAuthRefreshResult,
+  OrbioMcpClientConfig,
+  RecordUnrecognizedSampleOptions,
+} from './mcp/index.js';
+export {
+  AdapterShapeError,
+  balanceStructuredContentSchema,
+  createKeyStructuredContentSchema,
+  defaultOAuthRefresher,
+  defaultTransportFactory,
+  EnvFileTokenStore,
+  estimateBalanceMicroUsd,
+  getBalanceViaChain,
+  InMemoryTokenStore,
+  keyStatusStructuredContentSchema,
+  MCP_TOOL_NAMES,
+  McpHttpError,
+  McpUnavailableError,
+  OrbioMcpClient,
+  parseStructuredContent,
+  recordUnrecognizedSample,
+  revokeKeyStructuredContentSchema,
+} from './mcp/index.js';

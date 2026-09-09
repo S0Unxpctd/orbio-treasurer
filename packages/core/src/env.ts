@@ -28,6 +28,11 @@ const baseSchema = z.object({
   LEDGER_SQLITE_PATH: z.string().min(1).default('./treasurer.db'),
   ORBIO_MCP_URL: z.string().min(1).default('https://www.orbio.so/api/mcp'),
   ORBIO_MCP_TOKEN: optionalString,
+  // T-010: refresh pair for OrbioMcpClient (packages/core/src/mcp/). All optional — a kit agent
+  // may run with no MCP access at all (balance_source='estimate' from boot) per FR-2.0.
+  ORBIO_MCP_REFRESH_TOKEN: optionalString,
+  ORBIO_MCP_TOKEN_EXPIRES_AT: optionalString,
+  ORBIO_MCP_CLIENT_ID: optionalString,
   ORBIO_GATEWAY_BASE_URL: optionalString,
   ORBIO_KEY: optionalString,
 
