@@ -98,6 +98,17 @@ export interface HysteresisInput {
   /** Consecutive ticks, including this one, that the *raw* runway-derived state has equalled
    *  this tick's raw state. 1 on the tick the raw state first changes. */
   readonly consecutiveRawTicks: number;
+  /**
+   * Whether the *previous* tick, while in DEFICIT, had no funding option (audit-1 M1): tracked
+   * the same way `tick.mcpPreviouslyReachable` tracks MCP reachability, so `ALERT_DEFICIT_UNFUNDED`
+   * can fire "once per entry" into the *unfunded condition*, not just once per entry into the
+   * DEFICIT *state* — a funded→unfunded flip mid-DEFICIT-streak (caps exhaust, stake reserve
+   * breaches, book liquidity dries up) must still alert once. `true` = previous tick was in
+   * DEFICIT and unfunded; `false` = previous tick was funded (or wasn't in DEFICIT); `null` =
+   * no previous tick to compare against (so an unfunded tick now always counts as a fresh entry,
+   * matching `mcpPreviouslyReachable`'s convention).
+   */
+  readonly previouslyUnfundedInDeficit: boolean | null;
 }
 
 export interface PrebuyInput {

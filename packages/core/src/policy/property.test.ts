@@ -72,6 +72,7 @@ function randomInput(rng: () => number): EvaluateInput {
     hysteresis: {
       previousEffectiveState: pick(rng, STATES),
       consecutiveRawTicks: Math.floor(rng() * 4),
+      previouslyUnfundedInDeficit: rng() < 0.15 ? null : rng() < 0.5,
     },
     prebuy: {
       forecastUsdNextWindow: randomMoneyOrNull(rng, 50),

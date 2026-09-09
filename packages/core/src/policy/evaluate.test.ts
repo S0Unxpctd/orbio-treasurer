@@ -43,6 +43,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_POLICY } from './defaults.js';
 import { evaluate } from './evaluate.js';
+import { computeDeficitOptions } from './rules/deficit.js';
 import type {
   ActionPayload,
   BookViewInput,
@@ -107,6 +108,7 @@ function buildInput(overrides: Overrides = {}): EvaluateInput {
     hysteresis: {
       previousEffectiveState: 'COMFORTABLE',
       consecutiveRawTicks: 1,
+      previouslyUnfundedInDeficit: null,
       ...overrides.hysteresis,
     },
     prebuy: { forecastUsdNextWindow: null, windowDeadlineLabel: null, ...overrides.prebuy },
@@ -116,15 +118,20 @@ function buildInput(overrides: Overrides = {}): EvaluateInput {
 
 /** Numbers chosen so the *raw* runway state for each label is unambiguous with DEFAULT_POLICY
  *  (comfortable=7, tight=3): COMFORTABLE via net_burn=0 (∞ runway); TIGHT via runway=4d;
- *  DEFICIT via runway=1d. `previousEffectiveState` matches so effectiveState === label with no
- *  hysteresis delay, keeping each row's assertions about a single tick's behaviour. */
+ *  DEFICIT via runway=2.7d. `previousEffectiveState` matches so effectiveState === label with no
+ *  hysteresis delay, keeping each row's assertions about a single tick's behaviour. DEFICIT's
+ *  `need = tight_days(3) * burn(10) - credits(27) = 3` is deliberately small — well inside the
+ *  default `max_buy_usd_per_day` (10) — so the baseline "book on" scenarios exercise M2's
+ *  literal §10 pick (BUY_CREDIT only when it *fully covers* `need`); rows that need a larger,
+ *  partially-covered `need` override credits/burn directly (see 'M2: §10 literal option
+ *  selection' below). */
 const STATE_NUMBERS: Record<
   PolicyState,
   { creditsAvailableUsd: string; accrualRateUsdPerDay: string; burnRateUsdPerDay: string }
 > = {
   COMFORTABLE: { creditsAvailableUsd: '100', accrualRateUsdPerDay: '5', burnRateUsdPerDay: '1' },
   TIGHT: { creditsAvailableUsd: '40', accrualRateUsdPerDay: '0', burnRateUsdPerDay: '10' },
-  DEFICIT: { creditsAvailableUsd: '10', accrualRateUsdPerDay: '0', burnRateUsdPerDay: '10' },
+  DEFICIT: { creditsAvailableUsd: '27', accrualRateUsdPerDay: '0', burnRateUsdPerDay: '10' },
 };
 
 function findByKind<K extends ActionPayload['kind']>(
@@ -251,25 +258,72 @@ describe('once-per-entry alerts', () => {
     expect(findByKind(evaluate(staying), 'ALERT_TIGHT')).toBeUndefined();
   });
 
-  it('ALERT_DEFICIT_UNFUNDED fires once on entry into an unfunded DEFICIT, not on a tick that stays DEFICIT', () => {
+  it('ALERT_DEFICIT_UNFUNDED fires once on entry into an unfunded DEFICIT, not on a tick that stays unfunded', () => {
     const unfunded = { book: { buyAvailable: false }, stake: { available: false } };
+
+    // Fresh entry into DEFICIT (from TIGHT): no prior DEFICIT tick to compare against
+    // (previouslyUnfundedInDeficit: null) — counts as a fresh entry, alert fires.
     const entering = buildInput({
       ...STATE_NUMBERS.DEFICIT,
       ...unfunded,
-      hysteresis: { previousEffectiveState: 'TIGHT', consecutiveRawTicks: 1 },
+      hysteresis: {
+        previousEffectiveState: 'TIGHT',
+        consecutiveRawTicks: 1,
+        previouslyUnfundedInDeficit: null,
+      },
     });
     const enteringDecisions = evaluate(entering);
     expect(findByKind(enteringDecisions, 'SIGNAL_FUND')).toBeDefined();
     expect(findByKind(enteringDecisions, 'ALERT_DEFICIT_UNFUNDED')).toBeDefined();
 
+    // Continuing DEFICIT, already unfunded on the previous tick too: no second alert.
     const staying = buildInput({
       ...STATE_NUMBERS.DEFICIT,
       ...unfunded,
-      hysteresis: { previousEffectiveState: 'DEFICIT', consecutiveRawTicks: 5 },
+      hysteresis: {
+        previousEffectiveState: 'DEFICIT',
+        consecutiveRawTicks: 5,
+        previouslyUnfundedInDeficit: true,
+      },
     });
     const stayingDecisions = evaluate(staying);
     expect(findByKind(stayingDecisions, 'SIGNAL_FUND')).toBeDefined();
     expect(findByKind(stayingDecisions, 'ALERT_DEFICIT_UNFUNDED')).toBeUndefined();
+  });
+
+  it('audit-1 M1: ALERT_DEFICIT_UNFUNDED fires again on a funded→unfunded flip mid-DEFICIT-streak', () => {
+    const unfunded = { book: { buyAvailable: false }, stake: { available: false } };
+
+    // Continuously in DEFICIT, but the previous tick *was* funded (previouslyUnfundedInDeficit:
+    // false) and this tick just lost its funding option — the exact gap M1 found: this must
+    // alert, not stay silent because the agent has been in DEFICIT for a while already.
+    const justLostFunding = buildInput({
+      ...STATE_NUMBERS.DEFICIT,
+      ...unfunded,
+      hysteresis: {
+        previousEffectiveState: 'DEFICIT',
+        consecutiveRawTicks: 5,
+        previouslyUnfundedInDeficit: false,
+      },
+    });
+    const decisions = evaluate(justLostFunding);
+    expect(findByKind(decisions, 'SIGNAL_FUND')).toBeDefined();
+    expect(findByKind(decisions, 'ALERT_DEFICIT_UNFUNDED')).toBeDefined();
+  });
+
+  it('a funded DEFICIT tick emits no SIGNAL_FUND/ALERT_DEFICIT_UNFUNDED regardless of previouslyUnfundedInDeficit', () => {
+    const input = buildInput({
+      ...STATE_NUMBERS.DEFICIT, // book+stake on by default, need(3) fully covered → BUY_CREDIT
+      hysteresis: {
+        previousEffectiveState: 'DEFICIT',
+        consecutiveRawTicks: 5,
+        previouslyUnfundedInDeficit: true,
+      },
+    });
+    const decisions = evaluate(input);
+    expect(findByKind(decisions, 'BUY_CREDIT')).toBeDefined();
+    expect(findByKind(decisions, 'SIGNAL_FUND')).toBeUndefined();
+    expect(findByKind(decisions, 'ALERT_DEFICIT_UNFUNDED')).toBeUndefined();
   });
 });
 
@@ -378,14 +432,19 @@ describe('DEFICIT funding option matrix', () => {
     }
   });
 
-  it('needUsd caps BUY_CREDIT at the smaller of need and the remaining daily budget', () => {
-    // need = tight_days(3) * burn(10) - credits(10) = 20; budget = max(10) - bought(8) = 2.
+  it('computeDeficitOptions caps BUY_CREDIT at the smaller of need and the remaining daily budget (independent of selection)', () => {
+    // need = tight_days(3) * burn(10) - credits(10) = 20; budget = max(10) - bought(8) = 2. This
+    // tests the option's own amount formula, not which option evaluate() picks (M2 below covers
+    // that a non-covering BUY_CREDIT like this one is *not* selected).
     const input = buildInput({
-      ...STATE_NUMBERS.DEFICIT,
+      creditsAvailableUsd: '10',
+      burnRateUsdPerDay: '10',
+      accrualRateUsdPerDay: '0',
       caps: { boughtTodayUsd: '8', stakedTodayUsd: '0' },
       hysteresis: { previousEffectiveState: 'DEFICIT', consecutiveRawTicks: 3 },
     });
-    const buy = findByKind(evaluate(input), 'BUY_CREDIT');
+    const options = computeDeficitOptions(input);
+    const buy = options.find((o) => o.action.kind === 'BUY_CREDIT');
     expect(buy?.action).toMatchObject({ usd: '2.000000' });
   });
 
@@ -400,6 +459,55 @@ describe('DEFICIT funding option matrix', () => {
     // balance (not the raw balance) gates eligibility.
     expect(findByKind(evaluate(input), 'STAKE_UP')).toBeUndefined();
     expect(findByKind(evaluate(input), 'SIGNAL_FUND')).toBeDefined();
+  });
+
+  describe('M2: §10 literal option selection (audit-1 arbitration)', () => {
+    // need = tight_days(3) * burn(10) - credits(5) = 25 — bigger than max_buy_usd_per_day(10),
+    // so a present BUY_CREDIT option can never fully cover it at these numbers.
+    const bigNeed = {
+      creditsAvailableUsd: '5',
+      burnRateUsdPerDay: '10',
+      accrualRateUsdPerDay: '0',
+    };
+
+    it('BUY_CREDIT present but only partial (does not cover need) falls through to STAKE_UP', () => {
+      const input = buildInput({
+        ...bigNeed,
+        book: { buyAvailable: true },
+        stake: { available: true, stableBalanceUsd: '20' },
+        caps: { boughtTodayUsd: '8', stakedTodayUsd: '0' }, // buy budget = 10-8 = 2 < need(25)
+        hysteresis: { previousEffectiveState: 'DEFICIT', consecutiveRawTicks: 3 },
+      });
+      const decisions = evaluate(input);
+      expect(findByKind(decisions, 'STAKE_UP')).toBeDefined();
+      expect(findByKind(decisions, 'BUY_CREDIT')).toBeUndefined();
+    });
+
+    it('BUY_CREDIT present but only partial, STAKE_UP unavailable → SIGNAL_FUND, not the partial buy', () => {
+      const input = buildInput({
+        ...bigNeed,
+        book: { buyAvailable: true },
+        stake: { available: false },
+        caps: { boughtTodayUsd: '8', stakedTodayUsd: '0' },
+        hysteresis: { previousEffectiveState: 'DEFICIT', consecutiveRawTicks: 3 },
+      });
+      const decisions = evaluate(input);
+      expect(findByKind(decisions, 'SIGNAL_FUND')).toBeDefined();
+      expect(findByKind(decisions, 'BUY_CREDIT')).toBeUndefined();
+      expect(findByKind(decisions, 'STAKE_UP')).toBeUndefined();
+    });
+
+    it('BUY_CREDIT that exactly covers need (usd === need) is chosen over an available STAKE_UP', () => {
+      const input = buildInput({
+        ...STATE_NUMBERS.DEFICIT, // need = 3, budget = 10 ≥ 3 → fully covers
+        book: { buyAvailable: true },
+        stake: { available: true, stableBalanceUsd: '20' },
+        caps: CAPS_OPEN,
+        hysteresis: { previousEffectiveState: 'DEFICIT', consecutiveRawTicks: 3 },
+      });
+      const buy = findByKind(evaluate(input), 'BUY_CREDIT');
+      expect(buy?.action).toMatchObject({ usd: '3.000000' });
+    });
   });
 
   for (const state of ['COMFORTABLE', 'TIGHT'] as const) {

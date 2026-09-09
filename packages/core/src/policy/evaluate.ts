@@ -67,20 +67,24 @@ export function evaluate(input: EvaluateInput): Decision[] {
   }
 
   if (effectiveState === 'DEFICIT') {
+    const need = computeNeedUsd(input);
     const options = computeDeficitOptions(input);
-    const chosen = pickDeficitOption(options);
+    const chosen = pickDeficitOption(options, need);
 
     if (chosen) {
       emit(chosen.ruleId, chosen.action, humanizeFunding(chosen.action));
     } else {
       const action: ActionPayload = {
         kind: 'SIGNAL_FUND',
-        amountUsd: computeNeedUsd(input),
+        amountUsd: need,
         deadlineLabel: null,
         reason: 'deficit_unfunded',
       };
       emit('R-SIGNAL-1', action, humanizeSignalFund(action));
-      if (enteredState) {
+      // Audit-1 M1: "once per entry" into the *unfunded condition*, not just into DEFICIT —
+      // tracked via a dedicated input the same way MCP_UNAVAILABLE tracks reachability, so a
+      // funded→unfunded flip mid-DEFICIT-streak still alerts once.
+      if (input.hysteresis.previouslyUnfundedInDeficit !== true) {
         emit(
           'R-ALERT-DEFICIT-UNFUNDED',
           { kind: 'ALERT_DEFICIT_UNFUNDED' },

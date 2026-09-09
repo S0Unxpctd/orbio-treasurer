@@ -3,13 +3,25 @@
  * `BUY_CREDIT` / `STAKE_UP` options (respecting caps, reserves and the payback gate), and picks
  * between them.
  *
- * §10: "pick BUY_CREDIT if present and need can be covered today, else STAKE_UP (rationale:
- * credit closes the gap now; stake closes it over payback_days)." Read literally this could
- * gate the BUY_CREDIT pick on the buy amount alone covering `need`; taken with FR-4.3's ordered
- * list ("Choose the funding action by cost, among the ones whose adapter is available: BUY_CREDIT
- * ... STAKE_UP ...") and the stated rationale (credit is faster than a multi-day payback), this
- * module resolves the ambiguity by preferring BUY_CREDIT whenever it is present in `options` at
- * all — see tasks/T-015.md Discovered.
+ * Audit-1 M2 (orchestrator arbitration, PRD wins): §10's literal line —
+ *
+ *   "else: pick BUY_CREDIT if present and need can be covered today, else STAKE_UP
+ *    (rationale: credit closes the gap now; stake closes it over payback_days)"
+ *
+ * — is implemented exactly: `pickDeficitOption` below picks BUY_CREDIT only when it is present
+ * *and* its (cap-limited) amount fully covers `need`; otherwise STAKE_UP if it is present
+ * (already gated by its own caps, reserve and `payback_days ≤ stake_payback_max_days` in
+ * `computeStakeOption`); otherwise the caller (`evaluate.ts`) falls back to SIGNAL_FUND — even
+ * when a non-covering BUY_CREDIT option exists but STAKE_UP doesn't qualify either, per this
+ * same line (nothing in §10 says to fall back to a partial buy).
+ *
+ * §10 does not specify a cost comparison between BUY_CREDIT and STAKE_UP beyond this ordering
+ * plus STAKE_UP's own payback gate — no such comparison is added here. ADR-003's "the policy
+ * chooses between buying credit ... and staking ... by cost" is read as satisfied by that gate:
+ * STAKE_UP is cost-bounded by `stake_payback_max_days` (a option whose payback is too slow is
+ * cost-rejected before it ever reaches `pickDeficitOption`), while BUY_CREDIT has no
+ * PRD-specified cost ceiling of its own beyond fully covering `need`. See tasks/T-015.md Build
+ * notes ("Fixes after audit 1") for the full arbitration.
  */
 import {
   divideDecimal,
@@ -107,11 +119,13 @@ export function computeDeficitOptions(input: EvaluateInput): DeficitOption[] {
   return options;
 }
 
-/** §10's pick: BUY_CREDIT whenever present, else STAKE_UP, else null (caller emits SIGNAL_FUND). */
-export function pickDeficitOption(options: DeficitOption[]): DeficitOption | null {
-  return (
-    options.find((o) => o.action.kind === 'BUY_CREDIT') ??
-    options.find((o) => o.action.kind === 'STAKE_UP') ??
-    null
-  );
+/**
+ * §10's pick, literally: BUY_CREDIT only if present and it fully covers `need`; else STAKE_UP
+ * if present; else null (caller emits SIGNAL_FUND). See this module's header comment.
+ */
+export function pickDeficitOption(options: DeficitOption[], needUsd: string): DeficitOption | null {
+  const need = parseDecimal(needUsd);
+  const buy = options.find((o) => o.action.kind === 'BUY_CREDIT');
+  if (buy && parseDecimal(buy.action.usd) >= need) return buy;
+  return options.find((o) => o.action.kind === 'STAKE_UP') ?? null;
 }
