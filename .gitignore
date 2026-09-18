@@ -14,3 +14,4 @@ next-env.d.ts
 *.tsbuildinfo
 *.db
 *.sqlite
+.sync/
