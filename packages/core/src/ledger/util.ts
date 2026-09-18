@@ -8,6 +8,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Id } from './types.js';
+import { InvalidTxHashError } from './types.js';
 
 export function newId(): Id {
   return randomUUID();
@@ -26,5 +27,19 @@ export function assertUtcIso(value: string, field: string): void {
     throw new Error(
       `${field} must be a UTC ISO-8601 timestamp ending in "Z", got: ${JSON.stringify(value)}`,
     );
+  }
+}
+
+const TX_HASH_RE = /^0x[0-9a-f]{64}$/;
+
+/**
+ * S-02 AC4: `treasury_events.tx_hash` is validated at the store boundary (both dialects), not by
+ * a DB CHECK — a regex CHECK isn't portable between Postgres (`~`) and SQLite. Throws
+ * InvalidTxHashError on anything that isn't exactly `^0x[0-9a-f]{64}$` (lowercase hex only —
+ * matches how api-notes.md and every recorded fixture format a Robinhood Chain tx hash).
+ */
+export function assertTxHash(value: string): void {
+  if (!TX_HASH_RE.test(value)) {
+    throw new InvalidTxHashError(value);
   }
 }
