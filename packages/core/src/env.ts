@@ -55,6 +55,16 @@ const baseSchema = z.object({
   LANDING_URL: optionalString,
   LANDING_AGENT_TOKEN: optionalString,
 
+  // --- S-01: gateway + router (docs/PRD-1.0-sprint.md §4 T-1) ---
+  // Comma-separated `otk_<32 hex>` values, hashed with sha256 at boot (router/keys.ts). Optional
+  // at the env-schema level (CLAUDE.md #5c: the kit never *requires* this) — a gateway deployment
+  // with GATEWAY_KEYS unset simply 401s every caller, which the route handler enforces itself.
+  GATEWAY_KEYS: optionalString,
+  // Comma-separated Orbio model ids the router is allowed to pick as a tier default; unset = every
+  // catalog id allowed.
+  ROUTER_ALLOW: optionalString,
+  TREASURER_MODE: z.enum(['normal', 'eco', 'critical']).default('normal'),
+
   // --- hosted only (Supabase-backed ledger; DATABASE_URL is an accepted alternative) ---
   SUPABASE_URL: optionalString,
   SUPABASE_SERVICE_ROLE_KEY: optionalString,

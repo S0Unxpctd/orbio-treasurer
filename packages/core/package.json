@@ -15,7 +15,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && mkdir -p dist/ledger/sqlite && cp src/ledger/sqlite/schema.sql dist/ledger/sqlite/schema.sql",
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p scripts/tsconfig.json --noEmit",

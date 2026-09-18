@@ -1,0 +1,30 @@
+{
+  "_synthetic": "Hand-written, OpenAI/Orbio-shaped fixture — NOT recorded from the real Orbio API. See fixtures/README.md. Dated 2026-09-19.",
+  "object": "list",
+  "data": [
+    {
+      "id": "orbio/tiny-instruct",
+      "object": "model",
+      "owned_by": "orbio",
+      "pricing": { "prompt": "0.0000001", "completion": "0.0000002" }
+    },
+    {
+      "id": "orbio/small-chat",
+      "object": "model",
+      "owned_by": "orbio",
+      "pricing": { "prompt": "0.0000003", "completion": "0.0000006" }
+    },
+    {
+      "id": "orbio/mid-reasoner",
+      "object": "model",
+      "owned_by": "orbio",
+      "pricing": { "prompt": "0.0000015", "completion": "0.000003" }
+    },
+    {
+      "id": "orbio/large-flagship",
+      "object": "model",
+      "owned_by": "orbio",
+      "pricing": { "prompt": "0.00001", "completion": "0.00002" }
+    }
+  ]
+}

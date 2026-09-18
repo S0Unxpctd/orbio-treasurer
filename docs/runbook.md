@@ -23,6 +23,22 @@ Applies to `STAKE_CLIENT=uniswap` (L2a, ticket T-021) and `BOOK_CLIENT=orbio` (L
 - [ ] `TREASURER_LIVE=true` plus the relevant client flag set in Production only
 - [ ] Redeploy; watch `/status` and the decision feed for one hour; first executed order verified on Blockscout (stake) or on the key's quota (buy)
 
+## Gateway (S-01) — quick curl
+
+`GATEWAY_KEYS` (comma-separated `otk_<32 hex>`), `ORBIO_GATEWAY_BASE_URL` and `ORBIO_KEY` must be
+set. List the catalog (no auth) and route one call through `model: "auto"`:
+
+```
+curl "$SITE/v1/models" | jq '.data[].id'
+
+curl -s "$SITE/v1/chat/completions" \
+  -H "Authorization: Bearer otk_00000000000000000000000000000000" \
+  -H "content-type: application/json" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"one sentence: is the treasury healthy?"}]}' \
+  -D - -o /tmp/resp.json
+# response headers include x-treasurer-model / -tier / -reason / -cost-usd / -baseline-usd
+```
+
 ## Rollback
 
 Set `TREASURER_LIVE=false` → redeploy. The ledger is append-only; nothing to restore. Open buy orders (L2b) are resolved by Orbio; note their ids in the incident entry.
