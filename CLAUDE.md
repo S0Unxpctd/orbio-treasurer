@@ -1,5 +1,7 @@
 # CLAUDE.md — instructions for the coding agent
 
+> **Sprint 1.0 (Sept 19–20, 2026).** `docs/PRD-1.0-sprint.md` supersedes `PRD.md` wherever they differ. Sprint tickets are `tasks/S-xx.md`. The MCP client (`packages/core/src/mcp/`) is frozen and obsolete: do not build on it; its 17 failing tests are excluded from the suite (see `packages/core/vitest.config.ts`). Process for the sprint: Code → Test on every ticket; Audit added on money tickets (S-04, S-05, S-06, S-07). Everything else in this file still applies.
+
 You are building **Orbio Treasurer** for a 7-day hackathon. The human (So) is the product owner and reviews outcomes, not code. You do the engineering. Read this file first, then `PRD.md`, `ARCHITECTURE.md`, `PROCESS.md`, and the ticket you were given.
 
 ## Non-negotiables

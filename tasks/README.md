@@ -1,4 +1,21 @@
-# Backlog / board (v0.3 — deadline Sept 20)
+# Backlog / board
+
+## Sprint 1.0 (Sept 19–20) — see docs/PRD-1.0-sprint.md §4; these supersede the v0.3 board below
+
+| Ticket | Title | Package | Depends on | Status |
+|---|---|---|---|---|
+| [S-01](S-01.md) | Gateway + router (`/v1/chat/completions`, `model:"auto"`) | apps/web, core/router | — | in-code |
+| [S-02](S-02.md) | Ledger extension: metering, caller keys, treasury events, chain snapshots, savings | core/ledger, supabase | — | in-code |
+| S-03 | Treasury read (viem, chain 4663) + wallet-signed Orbio key | core/chain | S-02 | todo |
+| S-04 | Settle → claim → activate (gated) | core/chain | S-03 | todo |
+| S-05 | buyAndActivate (gated, capped) | core/chain | S-03 | todo |
+| S-06 | Tick + policy + wiring (recorder, keys, executors) | core/policy, apps/web | S-01, S-02, S-03 | todo |
+| S-07 | Stake-up: probe P-7b then buy ORBIO + stake, or manual fallback | core/chain | S-03 | todo |
+| S-08 | Public page + /api/stats + /api/agents | apps/web | S-02, S-03 | todo |
+| S-09 | Kit (`create-orbio-agent`) + demo agent | packages/create-orbio-agent, examples | S-01, S-08 | todo |
+| S-10 | README, landing copy, Loom, submission | root | all | todo |
+
+## v0.3 board (Sept 8–9, historical)
 
 Tickets follow `PROCESS.md`. Status lives inside each ticket; this table is updated by hand at the evening check-in.
 `P-00x` are probes (PRD §13a): 30 minutes, yes/no, evidence into `docs/api-notes.md`, no audit step. Conditional tickets (L2a, L2b) stay `blocked` until their gate opens. `W2` = week-2 tickets (PRD 0.3).
