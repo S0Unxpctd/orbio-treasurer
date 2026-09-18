@@ -32,6 +32,16 @@ export type AgentMode = 'dry_run' | 'live';
 export type BalanceSource = 'mcp' | 'gateway' | 'estimate';
 export type BookSnapshotSource = 'api' | 'page';
 export type OrderSide = 'buy' | 'stake';
+export type TreasuryEventKind =
+  | 'settle'
+  | 'claim'
+  | 'activate'
+  | 'buy'
+  | 'stake'
+  | 'mode_change'
+  | 'alert'
+  | 'dry_run';
+export type TreasuryEventToken = 'CREDIT' | 'ORBIO' | 'USDG' | 'ETH';
 
 // --- agents ---------------------------------------------------------------------------------
 
@@ -99,6 +109,43 @@ export interface KeyMetaRow {
   readonly createdAt: IsoTimestamp;
 }
 
+// --- caller_keys (S-02) ------------------------------------------------------------------------
+
+export interface NewCallerKey {
+  readonly agentId?: Id | null;
+  /** sha256 hex of the caller key — the key itself is never stored (CLAUDE.md #4). */
+  readonly keyHash: string;
+  /** Display prefix, e.g. "otk_" + 6 chars. */
+  readonly keyPrefix: string;
+  readonly label?: string | null;
+}
+
+export interface CallerKeyRow {
+  readonly id: Id;
+  readonly agentId: Id | null;
+  readonly keyHash: string;
+  readonly keyPrefix: string;
+  readonly label: string | null;
+  readonly revokedAt: IsoTimestamp | null;
+  readonly createdAt: IsoTimestamp;
+}
+
+/** Thrown by `revokeCallerKey` when the row is already revoked (AC3: "a second call throws"). */
+export class CallerKeyAlreadyRevokedError extends Error {
+  constructor(id: Id) {
+    super(`caller_keys row already revoked: ${id}`);
+    this.name = 'CallerKeyAlreadyRevokedError';
+  }
+}
+
+/** Thrown at the store boundary by `insertTreasuryEvent` for a malformed tx_hash (AC4). */
+export class InvalidTxHashError extends Error {
+  constructor(value: string) {
+    super(`tx_hash must match ^0x[0-9a-f]{64}$, got: ${JSON.stringify(value)}`);
+    this.name = 'InvalidTxHashError';
+  }
+}
+
 // --- treasury_snapshots -----------------------------------------------------------------------
 
 export interface NewTreasurySnapshot {
@@ -164,6 +211,14 @@ export interface NewUsageEvent {
   readonly latencyMs?: number | null;
   readonly status: string;
   readonly error?: string | null;
+  /** S-02: what the caller actually asked for (before routing), e.g. "auto" or "auto:M". */
+  readonly requestedModel?: string | null;
+  /** S-02: why the router picked `tierServed`/`model` (router.route()'s `reason`). */
+  readonly routeReason?: string | null;
+  /** S-02: cost this call would have had on the baseline model — savings() = baseline - cost. */
+  readonly baselineCostUsd?: Money | null;
+  /** S-02: fk to caller_keys — who called, nullable (no caller-key auth on some paths yet). */
+  readonly callerKeyId?: Id | null;
 }
 
 export interface UsageEventRow {
@@ -179,6 +234,10 @@ export interface UsageEventRow {
   readonly latencyMs: number | null;
   readonly status: string;
   readonly error: string | null;
+  readonly requestedModel: string | null;
+  readonly routeReason: string | null;
+  readonly baselineCostUsd: Money | null;
+  readonly callerKeyId: Id | null;
   readonly createdAt: IsoTimestamp;
 }
 
@@ -285,6 +344,67 @@ export interface OrderFillPatch {
   readonly externalId?: string | null;
 }
 
+// --- treasury_events (S-02) --------------------------------------------------------------------
+
+export interface NewTreasuryEvent {
+  readonly agentId: Id;
+  readonly at: IsoTimestamp;
+  readonly kind: TreasuryEventKind;
+  readonly amount?: TokenAmount | null;
+  readonly token?: TreasuryEventToken | null;
+  readonly usdValue?: Money | null;
+  /** Validated `^0x[0-9a-f]{64}$` at the store boundary — throws InvalidTxHashError otherwise. */
+  readonly txHash?: string | null;
+  readonly meta?: unknown;
+}
+
+export interface TreasuryEventRow {
+  readonly id: Id;
+  readonly agentId: Id;
+  readonly at: IsoTimestamp;
+  readonly kind: TreasuryEventKind;
+  readonly amount: TokenAmount | null;
+  readonly token: TreasuryEventToken | null;
+  readonly usdValue: Money | null;
+  readonly txHash: string | null;
+  readonly meta: unknown;
+  readonly createdAt: IsoTimestamp;
+}
+
+// --- chain_snapshots (S-02) ---------------------------------------------------------------------
+
+export interface NewChainSnapshot {
+  readonly agentId: Id;
+  readonly asOf: IsoTimestamp;
+  readonly stakedOrbio?: TokenAmount | null;
+  readonly settledCredit?: TokenAmount | null;
+  readonly creditWallet?: TokenAmount | null;
+  readonly creditApiAvailable?: Money | null;
+  readonly creditApiUsed?: Money | null;
+  readonly quoteCreditPerUsdg?: Money | null;
+  readonly ethBalance?: TokenAmount | null;
+  readonly usdgBalance?: TokenAmount | null;
+  readonly mode?: string | null;
+  readonly rpcUrlHost?: string | null;
+}
+
+export interface ChainSnapshotRow {
+  readonly id: Id;
+  readonly agentId: Id;
+  readonly asOf: IsoTimestamp;
+  readonly stakedOrbio: TokenAmount | null;
+  readonly settledCredit: TokenAmount | null;
+  readonly creditWallet: TokenAmount | null;
+  readonly creditApiAvailable: Money | null;
+  readonly creditApiUsed: Money | null;
+  readonly quoteCreditPerUsdg: Money | null;
+  readonly ethBalance: TokenAmount | null;
+  readonly usdgBalance: TokenAmount | null;
+  readonly mode: string | null;
+  readonly rpcUrlHost: string | null;
+  readonly createdAt: IsoTimestamp;
+}
+
 // --- the interface ------------------------------------------------------------------------------
 
 export class NotFoundError extends Error {
@@ -311,6 +431,12 @@ export interface LedgerStore {
   latestTreasurySnapshot(agentId: Id): Promise<TreasurySnapshotRow | null>;
 
   insertUsageEvent(row: NewUsageEvent): Promise<UsageEventRow>;
+  /**
+   * Reads back `usage_events` for `agentId`, most recent first — the read side metrics.ts's
+   * savings()/burnDaily() need (S-02; not itself an acceptance criterion, but necessary
+   * infrastructure for them — see tasks/S-02.md Discovered).
+   */
+  listUsageEvents(agentId: Id, opts?: { sinceAt?: IsoTimestamp }): Promise<UsageEventRow[]>;
 
   insertDecision(row: NewDecision): Promise<DecisionRow>;
 
@@ -320,6 +446,23 @@ export interface LedgerStore {
   getOrder(id: Id): Promise<OrderRow | null>;
   /** Throws NotFoundError if `id` doesn't exist. Rejects an empty patch. */
   updateOrderFill(id: Id, patch: OrderFillPatch): Promise<OrderRow>;
+
+  // --- S-02: caller_keys, treasury_events, chain_snapshots ---
+
+  insertCallerKey(row: NewCallerKey): Promise<CallerKeyRow>;
+  getCallerKeyByHash(keyHash: string): Promise<CallerKeyRow | null>;
+  /**
+   * The ONE guarded update on caller_keys: sets `revoked_at` (only). Throws NotFoundError if
+   * `id` doesn't exist; throws CallerKeyAlreadyRevokedError if it is already revoked (AC3).
+   */
+  revokeCallerKey(id: Id, at: IsoTimestamp): Promise<CallerKeyRow>;
+
+  /** Throws InvalidTxHashError if `row.txHash` is set and doesn't match ^0x[0-9a-f]{64}$ (AC4). */
+  insertTreasuryEvent(row: NewTreasuryEvent): Promise<TreasuryEventRow>;
+  listTreasuryEvents(agentId: Id, limit: number): Promise<TreasuryEventRow[]>;
+
+  insertChainSnapshot(row: NewChainSnapshot): Promise<ChainSnapshotRow>;
+  latestChainSnapshot(agentId: Id): Promise<ChainSnapshotRow | null>;
 
   /** Releases the underlying connection/handle. Safe to call more than once. */
   close(): Promise<void>;

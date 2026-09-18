@@ -14,6 +14,7 @@ export type { BookClientKind, Env, Ledger, StakeClientKind } from './env.js';
 export { EnvValidationError, loadEnv } from './env.js';
 export type { ScaledDecimal } from './ledger/decimal.js';
 export {
+  addDecimal,
   divideDecimal,
   formatDecimal,
   maxDecimal,
@@ -22,13 +23,24 @@ export {
   parseDecimal,
   subDecimal,
 } from './ledger/decimal.js';
-export type { SnapshotMetrics, SnapshotMetricsInput } from './ledger/metrics.js';
+export type {
+  MeteredTier,
+  MetricsWindow,
+  SavingsResult,
+  SnapshotMetrics,
+  SnapshotMetricsInput,
+  TierSavings,
+} from './ledger/metrics.js';
 export {
+  burnDaily,
   computeSnapshotMetrics,
   DEFAULT_EPSILON_USD_PER_DAY,
   LOW_CONFIDENCE_THRESHOLD_HOURS,
+  savings,
 } from './ledger/metrics.js';
 export { openPostgresLedger, PostgresLedgerStore } from './ledger/postgres/store.js';
+export { LedgerCallRecorder } from './ledger/recorder.js';
+export type { CallRecord, CallRecorder } from './ledger/recorder-types.js';
 export type {
   ColumnDef,
   ColumnType,
@@ -46,6 +58,8 @@ export type {
   BalanceSource,
   BookSnapshotRow,
   BookSnapshotSource,
+  CallerKeyRow,
+  ChainSnapshotRow,
   DecisionRow,
   Id,
   IsoTimestamp,
@@ -54,19 +68,25 @@ export type {
   Money,
   NewAgent,
   NewBookSnapshot,
+  NewCallerKey,
+  NewChainSnapshot,
   NewDecision,
   NewKeyMeta,
   NewOrder,
+  NewTreasuryEvent,
   NewTreasurySnapshot,
   NewUsageEvent,
   OrderFillPatch,
   OrderRow,
   OrderSide,
   TokenAmount,
+  TreasuryEventKind,
+  TreasuryEventRow,
+  TreasuryEventToken,
   TreasurySnapshotRow,
   UsageEventRow,
 } from './ledger/types.js';
-export { NotFoundError } from './ledger/types.js';
+export { CallerKeyAlreadyRevokedError, InvalidTxHashError, NotFoundError } from './ledger/types.js';
 // T-010: OrbioMcpClient, token refresh/rotation, balance chain mcp -> estimate.
 export type {
   BalanceSourceResult,

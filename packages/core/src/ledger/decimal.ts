@@ -73,6 +73,10 @@ export function normalizeTokenAmount(input: string | null | undefined): string |
   return trimmed;
 }
 
+export function addDecimal(a: ScaledDecimal, b: ScaledDecimal): ScaledDecimal {
+  return a + b;
+}
+
 export function subDecimal(a: ScaledDecimal, b: ScaledDecimal): ScaledDecimal {
   return a - b;
 }
