@@ -40,7 +40,10 @@ export {
 } from './ledger/metrics.js';
 export { openPostgresLedger, PostgresLedgerStore } from './ledger/postgres/store.js';
 export { LedgerCallRecorder } from './ledger/recorder.js';
-export type { CallRecord, CallRecorder } from './ledger/recorder-types.js';
+// Merge note (S-01 ∥ S-02): the router's CallRecord (router/recorder.ts) and the ledger's
+// (ledger/recorder-types.ts) were written in parallel with different shapes; S-06 adds the adapter.
+// The ledger pair is exported under a distinct name until then.
+export type { CallRecord as LedgerCallRecord, CallRecorder as LedgerCallRecorderContract } from './ledger/recorder-types.js';
 export type {
   ColumnDef,
   ColumnType,
