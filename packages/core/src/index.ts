@@ -67,6 +67,11 @@ export type {
   UsageEventRow,
 } from './ledger/types.js';
 export { NotFoundError } from './ledger/types.js';
+// S-01: redact()/log() weren't yet exported from this barrel — every consumer outside `core` (the
+// gateway route handlers) needs both to satisfy CLAUDE.md #4 ("Use redact() ... in every log
+// line"), so this ticket adds the export rather than duplicating either in apps/web.
+export type { Logger, LogLevel } from './log.js';
+export { createLogger, log } from './log.js';
 // T-010: OrbioMcpClient, token refresh/rotation, balance chain mcp -> estimate.
 export type {
   BalanceSourceResult,
@@ -107,3 +112,43 @@ export {
   recordUnrecognizedSample,
   revokeKeyStructuredContentSchema,
 } from './mcp/index.js';
+export type { RedactOptions } from './redact.js';
+export { DEFAULT_ALLOW_TX_HASH_KEYS, redact } from './redact.js';
+export { computeBaselineCostUsd, selectBaselineModel } from './router/baseline.js';
+export type { FetchedCatalog, ModelsResponse } from './router/catalog.js';
+export {
+  buildAutoModelEntries,
+  createCachedCatalogFetcher,
+  fetchModelCatalog,
+} from './router/catalog.js';
+export type { RouterAdapterShapeSource } from './router/errors.js';
+export { AdapterShapeError as RouterAdapterShapeError } from './router/errors.js';
+export type { CallerKeyLookup, CallerKeyStore } from './router/keys.js';
+export { authenticateBearer, EnvCallerKeyStore, hashKey, isValidKeyShape } from './router/keys.js';
+// S-01: gateway + router (docs/PRD-1.0-sprint.md §4 T-1). `route()` is pure; keys/recorder/
+// catalog/upstream do I/O. `AdapterShapeError` is aliased on export — the (frozen/obsolete, see
+// CLAUDE.md banner) mcp module already exports a class of that name above, and router/errors.ts
+// is deliberately its own, independent class rather than a shared dependency on mcp/schemas.ts.
+export type { CallRecord, CallRecorder, CallStatus } from './router/recorder.js';
+export {
+  InMemoryCallRecorder,
+  JsonlStdoutCallRecorder,
+  recordFireAndForget,
+} from './router/recorder.js';
+export { cheapestInTier, classifyTier, priceTier, route } from './router/route.js';
+export type {
+  Mode,
+  ModelCatalogEntry,
+  RouteInput,
+  RouteMessage,
+  RouteOpts,
+  RouteResult,
+  Tier,
+} from './router/types.js';
+export { MODES, RouterError, TIERS } from './router/types.js';
+export type {
+  ForwardChatCompletionParams,
+  ForwardChatCompletionResult,
+  UsageResult,
+} from './router/upstream.js';
+export { forwardChatCompletion, getUpstreamKey } from './router/upstream.js';

@@ -28,6 +28,36 @@ describe('loadEnv — defaults', () => {
   it('coerces RH_CHAIN_ID to a number', () => {
     expect(loadEnv({ RH_CHAIN_ID: '11155111' }).RH_CHAIN_ID).toBe(11155111);
   });
+
+  // S-01
+  it('defaults TREASURER_MODE to normal and leaves GATEWAY_KEYS/ROUTER_ALLOW unset', () => {
+    const env = loadEnv({});
+    expect(env.TREASURER_MODE).toBe('normal');
+    expect(env.GATEWAY_KEYS).toBeUndefined();
+    expect(env.ROUTER_ALLOW).toBeUndefined();
+  });
+
+  it('parses GATEWAY_KEYS, ROUTER_ALLOW and an explicit TREASURER_MODE', () => {
+    const env = loadEnv({
+      GATEWAY_KEYS: 'otk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,otk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      ROUTER_ALLOW: 'model-a,model-b',
+      TREASURER_MODE: 'eco',
+    });
+    expect(env.GATEWAY_KEYS).toContain('otk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(env.ROUTER_ALLOW).toBe('model-a,model-b');
+    expect(env.TREASURER_MODE).toBe('eco');
+  });
+
+  it('rejects an invalid TREASURER_MODE by name only', () => {
+    let error: unknown;
+    try {
+      loadEnv({ TREASURER_MODE: 'yolo' });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(EnvValidationError);
+    expect((error as EnvValidationError).missing).toEqual(['TREASURER_MODE']);
+  });
 });
 
 describe('loadEnv — missing required vars are named, never valued', () => {
