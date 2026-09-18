@@ -11,6 +11,9 @@ grant select on agents to anon;
 alter table key_meta enable row level security;
 -- key_meta: no anon policy — anon has no read access (RLS default-denies).
 
+alter table caller_keys enable row level security;
+-- caller_keys: no anon policy — anon has no read access (RLS default-denies).
+
 alter table treasury_snapshots enable row level security;
 create policy treasury_snapshots_anon_select on treasury_snapshots for select to anon using (
   exists (select 1 from agents a where a.id = treasury_snapshots.agent_id and a.public = true)
@@ -37,3 +40,15 @@ create policy orders_anon_select on orders for select to anon using (
   exists (select 1 from agents a where a.id = orders.agent_id and a.public = true)
 );
 grant select on orders to anon;
+
+alter table treasury_events enable row level security;
+create policy treasury_events_anon_select on treasury_events for select to anon using (
+  exists (select 1 from agents a where a.id = treasury_events.agent_id and a.public = true)
+);
+grant select on treasury_events to anon;
+
+alter table chain_snapshots enable row level security;
+create policy chain_snapshots_anon_select on chain_snapshots for select to anon using (
+  exists (select 1 from agents a where a.id = chain_snapshots.agent_id and a.public = true)
+);
+grant select on chain_snapshots to anon;

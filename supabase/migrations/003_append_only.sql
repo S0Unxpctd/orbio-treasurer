@@ -39,6 +39,30 @@ create trigger trg_key_meta_append_only
 before update or delete on key_meta
 for each row execute function ledger_reject_write();
 
+create or replace function caller_keys_guard_write() returns trigger as $$
+begin
+  if TG_OP = 'DELETE' then
+    raise exception 'caller_keys rows cannot be deleted';
+  end if;
+  if TG_OP = 'UPDATE' then
+    if NEW.id IS DISTINCT FROM OLD.id
+       OR NEW.agent_id IS DISTINCT FROM OLD.agent_id
+       OR NEW.key_hash IS DISTINCT FROM OLD.key_hash
+       OR NEW.key_prefix IS DISTINCT FROM OLD.key_prefix
+       OR NEW.label IS DISTINCT FROM OLD.label
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at
+    then
+      raise exception 'caller_keys: only revoked_at may be updated';
+    end if;
+  end if;
+  return NEW;
+end;
+$$ language plpgsql;
+
+create trigger trg_caller_keys_guard
+before update or delete on caller_keys
+for each row execute function caller_keys_guard_write();
+
 create trigger trg_treasury_snapshots_append_only
 before update or delete on treasury_snapshots
 for each row execute function ledger_reject_write();
@@ -83,3 +107,11 @@ $$ language plpgsql;
 create trigger trg_orders_guard
 before update or delete on orders
 for each row execute function orders_guard_write();
+
+create trigger trg_treasury_events_append_only
+before update or delete on treasury_events
+for each row execute function ledger_reject_write();
+
+create trigger trg_chain_snapshots_append_only
+before update or delete on chain_snapshots
+for each row execute function ledger_reject_write();

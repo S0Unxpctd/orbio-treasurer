@@ -32,6 +32,16 @@ CREATE TABLE IF NOT EXISTS key_meta (
   reason TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+-- S-02 (PRD 1.0 §4 T-2). Who called the gateway — never the key itself, only its hash and a display prefix. The ONE guarded update is revocation: revoked_at may move null -> a value exactly once (enforced at the store boundary, mirrored by the mutable-guard trigger allow-list below); no other column, and no second revocation, is ever permitted.
+CREATE TABLE IF NOT EXISTS caller_keys (
+  id TEXT PRIMARY KEY NOT NULL,
+  agent_id TEXT REFERENCES agents(id),
+  key_hash TEXT NOT NULL UNIQUE,
+  key_prefix TEXT NOT NULL,
+  label TEXT,
+  revoked_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
 -- Append-only. PRD §9 + the balance/yield columns added after §9's prose.
 CREATE TABLE IF NOT EXISTS treasury_snapshots (
   id TEXT PRIMARY KEY NOT NULL,
@@ -57,7 +67,7 @@ CREATE TABLE IF NOT EXISTS treasury_snapshots (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_treasury_snapshots_agent_id_as_of_desc ON treasury_snapshots (agent_id, as_of DESC);
--- Append-only. One row per metered inference call. PRD §9.
+-- Append-only. One row per metered inference call. PRD §9; S-02 adds the router-meter columns.
 CREATE TABLE IF NOT EXISTS usage_events (
   id TEXT PRIMARY KEY NOT NULL,
   agent_id TEXT NOT NULL REFERENCES agents(id),
@@ -71,6 +81,10 @@ CREATE TABLE IF NOT EXISTS usage_events (
   latency_ms INTEGER,
   status TEXT NOT NULL,
   error TEXT,
+  requested_model TEXT,
+  route_reason TEXT,
+  baseline_cost_usd TEXT,
+  caller_key_id TEXT REFERENCES caller_keys(id),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_usage_events_agent_id_at_desc ON usage_events (agent_id, at DESC);
@@ -124,6 +138,38 @@ CREATE TABLE IF NOT EXISTS orders (
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_orders_agent_id_placed_at_desc ON orders (agent_id, placed_at DESC);
+-- Append-only. S-02 (PRD 1.0 §4 T-2, §6): what the treasury did on-chain (or dry-ran), with tx hashes when there is one. tx_hash is validated (^0x[0-9a-f]{64}$) at the store boundary, not by a DB CHECK — see util.ts assertTxHash / CLAUDE.md #6.
+CREATE TABLE IF NOT EXISTS treasury_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  at TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind in ('settle','claim','activate','buy','stake','mode_change','alert','dry_run')),
+  amount TEXT,
+  token TEXT CHECK (token in ('CREDIT','ORBIO','USDG','ETH')),
+  usd_value TEXT,
+  tx_hash TEXT,
+  meta TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_treasury_events_agent_id_at_desc ON treasury_events (agent_id, at DESC);
+-- Append-only. S-02 (PRD 1.0 §4 T-2, §6): what the treasury saw on-chain/off-chain at a point in time.
+CREATE TABLE IF NOT EXISTS chain_snapshots (
+  id TEXT PRIMARY KEY NOT NULL,
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  as_of TEXT NOT NULL,
+  staked_orbio TEXT,
+  settled_credit TEXT,
+  credit_wallet TEXT,
+  credit_api_available TEXT,
+  credit_api_used TEXT,
+  quote_credit_per_usdg TEXT,
+  eth_balance TEXT,
+  usdg_balance TEXT,
+  mode TEXT,
+  rpc_url_host TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_chain_snapshots_agent_id_as_of_desc ON chain_snapshots (agent_id, as_of DESC);
 
 -- Append-only / mutable-column-guard triggers.
 
@@ -160,6 +206,26 @@ CREATE TRIGGER IF NOT EXISTS trg_key_meta_no_delete
 BEFORE DELETE ON key_meta
 BEGIN
   SELECT RAISE(ABORT, 'key_meta is append-only: DELETE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_caller_keys_no_delete
+BEFORE DELETE ON caller_keys
+BEGIN
+  SELECT RAISE(ABORT, 'caller_keys rows cannot be deleted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_caller_keys_guard_update
+BEFORE UPDATE ON caller_keys
+WHEN (
+    NEW.id IS NOT OLD.id
+    OR NEW.agent_id IS NOT OLD.agent_id
+    OR NEW.key_hash IS NOT OLD.key_hash
+    OR NEW.key_prefix IS NOT OLD.key_prefix
+    OR NEW.label IS NOT OLD.label
+    OR NEW.created_at IS NOT OLD.created_at
+)
+BEGIN
+  SELECT RAISE(ABORT, 'caller_keys: only revoked_at may be updated');
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_treasury_snapshots_no_update
@@ -233,4 +299,28 @@ WHEN (
 )
 BEGIN
   SELECT RAISE(ABORT, 'orders: only status, filled_usd, fee_usd, resolved_at, external_id may be updated');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_treasury_events_no_update
+BEFORE UPDATE ON treasury_events
+BEGIN
+  SELECT RAISE(ABORT, 'treasury_events is append-only: UPDATE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_treasury_events_no_delete
+BEFORE DELETE ON treasury_events
+BEGIN
+  SELECT RAISE(ABORT, 'treasury_events is append-only: DELETE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_chain_snapshots_no_update
+BEFORE UPDATE ON chain_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'chain_snapshots is append-only: UPDATE is not permitted');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_chain_snapshots_no_delete
+BEFORE DELETE ON chain_snapshots
+BEGIN
+  SELECT RAISE(ABORT, 'chain_snapshots is append-only: DELETE is not permitted');
 END;

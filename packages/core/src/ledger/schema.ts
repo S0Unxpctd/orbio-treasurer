@@ -191,6 +191,23 @@ export const LEDGER_SCHEMA: readonly TableDef[] = [
     rls: { kind: 'none' },
   },
   {
+    name: 'caller_keys',
+    comment:
+      'S-02 (PRD 1.0 §4 T-2). Who called the gateway — never the key itself, only its hash and ' +
+      'a display prefix. The ONE guarded update is revocation: revoked_at may move null -> a ' +
+      'value exactly once (enforced at the store boundary, mirrored by the mutable-guard ' +
+      'trigger allow-list below); no other column, and no second revocation, is ever permitted.',
+    columns: [
+      fk('agent_id', 'agents', { notNull: false }),
+      text('key_hash', { notNull: true, unique: true }),
+      text('key_prefix', { notNull: true }),
+      text('label'),
+      timestamp('revoked_at'),
+    ],
+    writePolicy: { kind: 'mutable-guard', mutableColumns: ['revoked_at'] },
+    rls: { kind: 'none' },
+  },
+  {
     name: 'treasury_snapshots',
     comment: "Append-only. PRD §9 + the balance/yield columns added after §9's prose.",
     columns: [
@@ -223,7 +240,8 @@ export const LEDGER_SCHEMA: readonly TableDef[] = [
   },
   {
     name: 'usage_events',
-    comment: 'Append-only. One row per metered inference call. PRD §9.',
+    comment:
+      'Append-only. One row per metered inference call. PRD §9; S-02 adds the router-meter columns.',
     columns: [
       fk('agent_id', 'agents'),
       timestamp('at', { notNull: true }),
@@ -236,6 +254,12 @@ export const LEDGER_SCHEMA: readonly TableDef[] = [
       int('latency_ms'),
       text('status', { notNull: true }),
       text('error'),
+      // S-02 (PRD 1.0 §4 T-2, §6): what the gateway actually asked for/why, and the caller key
+      // that made the call, so savings() and burnDaily() can be computed straight off this table.
+      text('requested_model'),
+      text('route_reason'),
+      money('baseline_cost_usd'),
+      fk('caller_key_id', 'caller_keys', { notNull: false }),
     ],
     indexes: [{ columns: ['agent_id', 'at desc'] }],
     writePolicy: { kind: 'append-only' },
@@ -303,6 +327,52 @@ export const LEDGER_SCHEMA: readonly TableDef[] = [
       kind: 'mutable-guard',
       mutableColumns: ['status', 'filled_usd', 'fee_usd', 'resolved_at', 'external_id'],
     },
+    rls: { kind: 'via-agent-public' },
+  },
+  {
+    name: 'treasury_events',
+    comment:
+      'Append-only. S-02 (PRD 1.0 §4 T-2, §6): what the treasury did on-chain (or dry-ran), ' +
+      'with tx hashes when there is one. tx_hash is validated (^0x[0-9a-f]{64}$) at the store ' +
+      'boundary, not by a DB CHECK — see util.ts assertTxHash / CLAUDE.md #6.',
+    columns: [
+      fk('agent_id', 'agents'),
+      timestamp('at', { notNull: true }),
+      text('kind', {
+        notNull: true,
+        check:
+          "kind in ('settle','claim','activate','buy','stake','mode_change','alert','dry_run')",
+      }),
+      tokenAmount('amount'),
+      text('token', { check: "token in ('CREDIT','ORBIO','USDG','ETH')" }),
+      money('usd_value'),
+      text('tx_hash'),
+      jsonb('meta'),
+    ],
+    indexes: [{ columns: ['agent_id', 'at desc'] }],
+    writePolicy: { kind: 'append-only' },
+    rls: { kind: 'via-agent-public' },
+  },
+  {
+    name: 'chain_snapshots',
+    comment:
+      'Append-only. S-02 (PRD 1.0 §4 T-2, §6): what the treasury saw on-chain/off-chain at a point in time.',
+    columns: [
+      fk('agent_id', 'agents'),
+      timestamp('as_of', { notNull: true }),
+      tokenAmount('staked_orbio'),
+      tokenAmount('settled_credit'),
+      tokenAmount('credit_wallet'),
+      money('credit_api_available'),
+      money('credit_api_used'),
+      money('quote_credit_per_usdg'),
+      tokenAmount('eth_balance'),
+      tokenAmount('usdg_balance'),
+      text('mode'),
+      text('rpc_url_host'),
+    ],
+    indexes: [{ columns: ['agent_id', 'as_of desc'] }],
+    writePolicy: { kind: 'append-only' },
     rls: { kind: 'via-agent-public' },
   },
 ];
