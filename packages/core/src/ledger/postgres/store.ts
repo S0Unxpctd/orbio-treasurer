@@ -32,24 +32,31 @@ import type {
   AgentMutablePatch,
   AgentRow,
   BookSnapshotRow,
+  CallerKeyRow,
+  ChainSnapshotRow,
   DecisionRow,
   Id,
+  IsoTimestamp,
   KeyMetaRow,
   LedgerStore,
   NewAgent,
   NewBookSnapshot,
+  NewCallerKey,
+  NewChainSnapshot,
   NewDecision,
   NewKeyMeta,
   NewOrder,
+  NewTreasuryEvent,
   NewTreasurySnapshot,
   NewUsageEvent,
   OrderFillPatch,
   OrderRow,
+  TreasuryEventRow,
   TreasurySnapshotRow,
   UsageEventRow,
 } from '../types.js';
-import { NotFoundError } from '../types.js';
-import { assertUtcIso, newId } from '../util.js';
+import { CallerKeyAlreadyRevokedError, NotFoundError } from '../types.js';
+import { assertTxHash, assertUtcIso, newId } from '../util.js';
 
 type Sql = ReturnType<typeof postgres>;
 type Row = Record<string, unknown>;
@@ -145,6 +152,56 @@ function mapUsageEventRow(r: Row): UsageEventRow {
     latencyMs: (r.latency_ms as number | null) ?? null,
     status: r.status as string,
     error: (r.error as string | null) ?? null,
+    requestedModel: (r.requested_model as string | null) ?? null,
+    routeReason: (r.route_reason as string | null) ?? null,
+    baselineCostUsd: (r.baseline_cost_usd as string | null) ?? null,
+    callerKeyId: (r.caller_key_id as string | null) ?? null,
+    createdAt: toIso(r.created_at),
+  };
+}
+
+function mapCallerKeyRow(r: Row): CallerKeyRow {
+  return {
+    id: r.id as Id,
+    agentId: (r.agent_id as string | null) ?? null,
+    keyHash: r.key_hash as string,
+    keyPrefix: r.key_prefix as string,
+    label: (r.label as string | null) ?? null,
+    revokedAt: toIsoOrNull(r.revoked_at),
+    createdAt: toIso(r.created_at),
+  };
+}
+
+function mapTreasuryEventRow(r: Row): TreasuryEventRow {
+  return {
+    id: r.id as Id,
+    agentId: r.agent_id as Id,
+    at: toIso(r.at),
+    kind: r.kind as TreasuryEventRow['kind'],
+    amount: (r.amount as string | null) ?? null,
+    token: (r.token as TreasuryEventRow['token']) ?? null,
+    usdValue: (r.usd_value as string | null) ?? null,
+    txHash: (r.tx_hash as string | null) ?? null,
+    meta: fromJsonb(r.meta),
+    createdAt: toIso(r.created_at),
+  };
+}
+
+function mapChainSnapshotRow(r: Row): ChainSnapshotRow {
+  return {
+    id: r.id as Id,
+    agentId: r.agent_id as Id,
+    asOf: toIso(r.as_of),
+    stakedOrbio: (r.staked_orbio as string | null) ?? null,
+    settledCredit: (r.settled_credit as string | null) ?? null,
+    creditWallet: (r.credit_wallet as string | null) ?? null,
+    creditApiAvailable: (r.credit_api_available as string | null) ?? null,
+    creditApiUsed: (r.credit_api_used as string | null) ?? null,
+    quoteCreditPerUsdg: (r.quote_credit_per_usdg as string | null) ?? null,
+    ethBalance: (r.eth_balance as string | null) ?? null,
+    usdgBalance: (r.usdg_balance as string | null) ?? null,
+    mode: (r.mode as string | null) ?? null,
+    rpcUrlHost: (r.rpc_url_host as string | null) ?? null,
     createdAt: toIso(r.created_at),
   };
 }
@@ -325,15 +382,35 @@ export class PostgresLedgerStore implements LedgerStore {
     const rows = await this.sql`
       insert into usage_events
         (id, agent_id, at, model, tier_requested, tier_served, prompt_tokens, completion_tokens,
-         cost_usd, latency_ms, status, error)
+         cost_usd, latency_ms, status, error, requested_model, route_reason, baseline_cost_usd,
+         caller_key_id)
       values
         (${id}, ${row.agentId}, ${row.at}, ${row.model}, ${row.tierRequested ?? null},
          ${row.tierServed ?? null}, ${row.promptTokens ?? null}, ${row.completionTokens ?? null},
          ${normalizeMoney(row.costUsd)}, ${row.latencyMs ?? null}, ${row.status},
-         ${row.error ?? null})
+         ${row.error ?? null}, ${row.requestedModel ?? null}, ${row.routeReason ?? null},
+         ${normalizeMoney(row.baselineCostUsd)}, ${row.callerKeyId ?? null})
       returning *
     `;
     return mapUsageEventRow(rows[0] as Row);
+  }
+
+  async listUsageEvents(
+    agentId: Id,
+    opts: { sinceAt?: IsoTimestamp } = {},
+  ): Promise<UsageEventRow[]> {
+    if (opts.sinceAt !== undefined) assertUtcIso(opts.sinceAt, 'sinceAt');
+    const rows =
+      opts.sinceAt !== undefined
+        ? await this.sql`
+            select * from usage_events
+            where agent_id = ${agentId} and at >= ${opts.sinceAt}
+            order by at desc
+          `
+        : await this.sql`
+            select * from usage_events where agent_id = ${agentId} order by at desc
+          `;
+    return (rows as Row[]).map(mapUsageEventRow);
   }
 
   // --- decisions ---
@@ -410,6 +487,89 @@ export class PostgresLedgerStore implements LedgerStore {
     const dbRow = await this.updateRow('orders', id, columns);
     if (!dbRow) throw new NotFoundError('orders', id);
     return mapOrderRow(dbRow);
+  }
+
+  // --- caller_keys (S-02) ---
+
+  async insertCallerKey(row: NewCallerKey): Promise<CallerKeyRow> {
+    const id = newId();
+    const rows = await this.sql`
+      insert into caller_keys (id, agent_id, key_hash, key_prefix, label)
+      values (${id}, ${row.agentId ?? null}, ${row.keyHash}, ${row.keyPrefix}, ${row.label ?? null})
+      returning *
+    `;
+    return mapCallerKeyRow(rows[0] as Row);
+  }
+
+  async getCallerKeyByHash(keyHash: string): Promise<CallerKeyRow | null> {
+    const rows = await this.sql`select * from caller_keys where key_hash = ${keyHash}`;
+    return rows[0] ? mapCallerKeyRow(rows[0] as Row) : null;
+  }
+
+  async revokeCallerKey(id: Id, at: IsoTimestamp): Promise<CallerKeyRow> {
+    assertUtcIso(at, 'at');
+    const existingRows = await this.sql`select * from caller_keys where id = ${id}`;
+    const existing = existingRows[0] as Row | undefined;
+    if (!existing) throw new NotFoundError('caller_keys', id);
+    if (existing.revoked_at !== null) throw new CallerKeyAlreadyRevokedError(id);
+    const rows = await this.sql`
+      update caller_keys set revoked_at = ${at} where id = ${id} and revoked_at is null
+      returning *
+    `;
+    // Guarded by the existence + null checks above; see the identical note in sqlite/store.ts.
+    if (!rows[0]) throw new CallerKeyAlreadyRevokedError(id);
+    return mapCallerKeyRow(rows[0] as Row);
+  }
+
+  // --- treasury_events (S-02) ---
+
+  async insertTreasuryEvent(row: NewTreasuryEvent): Promise<TreasuryEventRow> {
+    assertUtcIso(row.at, 'at');
+    if (row.txHash !== undefined && row.txHash !== null) assertTxHash(row.txHash);
+    const id = newId();
+    const rows = await this.sql`
+      insert into treasury_events (id, agent_id, at, kind, amount, token, usd_value, tx_hash, meta)
+      values
+        (${id}, ${row.agentId}, ${row.at}, ${row.kind}, ${normalizeTokenAmount(row.amount)},
+         ${row.token ?? null}, ${normalizeMoney(row.usdValue)}, ${row.txHash ?? null},
+         ${toJsonbLiteral(row.meta)}::jsonb)
+      returning *
+    `;
+    return mapTreasuryEventRow(rows[0] as Row);
+  }
+
+  async listTreasuryEvents(agentId: Id, limit: number): Promise<TreasuryEventRow[]> {
+    const rows = await this.sql`
+      select * from treasury_events where agent_id = ${agentId} order by at desc limit ${limit}
+    `;
+    return (rows as Row[]).map(mapTreasuryEventRow);
+  }
+
+  // --- chain_snapshots (S-02) ---
+
+  async insertChainSnapshot(row: NewChainSnapshot): Promise<ChainSnapshotRow> {
+    assertUtcIso(row.asOf, 'asOf');
+    const id = newId();
+    const rows = await this.sql`
+      insert into chain_snapshots
+        (id, agent_id, as_of, staked_orbio, settled_credit, credit_wallet, credit_api_available,
+         credit_api_used, quote_credit_per_usdg, eth_balance, usdg_balance, mode, rpc_url_host)
+      values
+        (${id}, ${row.agentId}, ${row.asOf}, ${normalizeTokenAmount(row.stakedOrbio)},
+         ${normalizeTokenAmount(row.settledCredit)}, ${normalizeTokenAmount(row.creditWallet)},
+         ${normalizeMoney(row.creditApiAvailable)}, ${normalizeMoney(row.creditApiUsed)},
+         ${normalizeMoney(row.quoteCreditPerUsdg)}, ${normalizeTokenAmount(row.ethBalance)},
+         ${normalizeTokenAmount(row.usdgBalance)}, ${row.mode ?? null}, ${row.rpcUrlHost ?? null})
+      returning *
+    `;
+    return mapChainSnapshotRow(rows[0] as Row);
+  }
+
+  async latestChainSnapshot(agentId: Id): Promise<ChainSnapshotRow | null> {
+    const rows = await this.sql`
+      select * from chain_snapshots where agent_id = ${agentId} order by as_of desc limit 1
+    `;
+    return rows[0] ? mapChainSnapshotRow(rows[0] as Row) : null;
   }
 
   async close(): Promise<void> {
