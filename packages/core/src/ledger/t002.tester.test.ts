@@ -230,11 +230,12 @@ describeOrSkip('postgres — tester additions (TEST_DATABASE_URL set)', async ()
   // apply it fresh here too (same drop-and-reapply pattern), independently.
   beforeAll(async () => {
     await sql.unsafe(`
-      drop table if exists orders, book_snapshots, decisions, usage_events,
-        treasury_snapshots, key_meta, agents cascade;
+      drop table if exists chain_snapshots, treasury_events, orders, book_snapshots, decisions,
+        usage_events, treasury_snapshots, caller_keys, key_meta, agents cascade;
       drop function if exists ledger_reject_write() cascade;
       drop function if exists agents_guard_write() cascade;
       drop function if exists orders_guard_write() cascade;
+      drop function if exists caller_keys_guard_write() cascade;
     `);
     await sql.unsafe(
       "do $$ begin\n      if not exists (select 1 from pg_roles where rolname = 'anon') then\n        create role anon nologin;\n      end if;\n    end $$;",

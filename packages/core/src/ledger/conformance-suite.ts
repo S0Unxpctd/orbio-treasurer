@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { LedgerStore } from './types.js';
-import { NotFoundError } from './types.js';
+import { CallerKeyAlreadyRevokedError, InvalidTxHashError, NotFoundError } from './types.js';
 
 function uniqueSlug(prefix: string): string {
   return `${prefix}-${randomUUID().slice(0, 8)}`;
@@ -329,6 +329,270 @@ export function defineLedgerConformanceSuite(
           balanceSource: 'mcp',
         }),
       ).rejects.toThrow(/UTC ISO-8601/);
+    });
+
+    // --- S-02: usage_events new fields + listUsageEvents ---------------------------------------
+
+    it('usage_events: insert round-trips requestedModel/routeReason/baselineCostUsd/callerKeyId (S-02)', async () => {
+      const agent = await seedAgent();
+      const callerKey = await store.insertCallerKey({
+        keyHash: uniqueSlug('hash'),
+        keyPrefix: 'otk_',
+      });
+      const inserted = await store.insertUsageEvent({
+        agentId: agent.id,
+        at: new Date().toISOString(),
+        model: 'openrouter/economy-model',
+        tierServed: 'S',
+        costUsd: '0.030102',
+        baselineCostUsd: '0.100000',
+        requestedModel: 'auto',
+        routeReason: 'short prompt, no tools',
+        callerKeyId: callerKey.id,
+        status: 'ok',
+      });
+      expect(inserted.requestedModel).toBe('auto');
+      expect(inserted.routeReason).toBe('short prompt, no tools');
+      expect(inserted.baselineCostUsd).toBe('0.100000');
+      expect(inserted.callerKeyId).toBe(callerKey.id);
+    });
+
+    it('usage_events: the S-02 fields default to null when omitted', async () => {
+      const agent = await seedAgent();
+      const inserted = await store.insertUsageEvent({
+        agentId: agent.id,
+        at: new Date().toISOString(),
+        model: 'openrouter/economy-model',
+        status: 'ok',
+      });
+      expect(inserted.requestedModel).toBeNull();
+      expect(inserted.routeReason).toBeNull();
+      expect(inserted.baselineCostUsd).toBeNull();
+      expect(inserted.callerKeyId).toBeNull();
+    });
+
+    it('usage_events: listUsageEvents returns an agent’s events, most recent first, optionally since a timestamp (S-02)', async () => {
+      const agent = await seedAgent();
+      const first = await store.insertUsageEvent({
+        agentId: agent.id,
+        at: '2026-01-01T00:00:00.000Z',
+        model: 'm1',
+        status: 'ok',
+      });
+      const second = await store.insertUsageEvent({
+        agentId: agent.id,
+        at: '2026-01-02T00:00:00.000Z',
+        model: 'm2',
+        status: 'ok',
+      });
+      const all = await store.listUsageEvents(agent.id);
+      expect(all.map((e) => e.id)).toEqual([second.id, first.id]);
+
+      const sinceSecond = await store.listUsageEvents(agent.id, {
+        sinceAt: '2026-01-01T12:00:00.000Z',
+      });
+      expect(sinceSecond.map((e) => e.id)).toEqual([second.id]);
+    });
+
+    // --- S-02: caller_keys -----------------------------------------------------------------------
+
+    it('caller_keys: insertCallerKey -> getCallerKeyByHash round-trip; agent_id may be null (S-02)', async () => {
+      const keyHash = uniqueSlug('hash');
+      const inserted = await store.insertCallerKey({
+        keyHash,
+        keyPrefix: 'otk_ab12',
+        label: 'demo agent',
+      });
+      expect(inserted.agentId).toBeNull();
+      expect(inserted.revokedAt).toBeNull();
+      expect(inserted.keyHash).toBe(keyHash);
+
+      const byHash = await store.getCallerKeyByHash(keyHash);
+      expect(byHash).toEqual(inserted);
+    });
+
+    it('caller_keys: getCallerKeyByHash returns null for an unknown hash (S-02)', async () => {
+      expect(await store.getCallerKeyByHash(uniqueSlug('no-such-hash'))).toBeNull();
+    });
+
+    it('caller_keys: revokeCallerKey sets revoked_at once; only that column changes (AC3, S-02)', async () => {
+      const agent = await seedAgent();
+      const created = await store.insertCallerKey({
+        agentId: agent.id,
+        keyHash: uniqueSlug('hash'),
+        keyPrefix: 'otk_cd34',
+      });
+      const at = new Date().toISOString();
+      const revoked = await store.revokeCallerKey(created.id, at);
+      expect(revoked.revokedAt).toBe(at);
+      expect(revoked.keyHash).toBe(created.keyHash);
+      expect(revoked.keyPrefix).toBe(created.keyPrefix);
+      expect(revoked.agentId).toBe(created.agentId);
+    });
+
+    it('caller_keys: revokeCallerKey throws CallerKeyAlreadyRevokedError on a second call (AC3, S-02)', async () => {
+      const created = await store.insertCallerKey({
+        keyHash: uniqueSlug('hash'),
+        keyPrefix: 'otk_ef56',
+      });
+      await store.revokeCallerKey(created.id, new Date().toISOString());
+      await expect(store.revokeCallerKey(created.id, new Date().toISOString())).rejects.toThrow(
+        CallerKeyAlreadyRevokedError,
+      );
+    });
+
+    it('caller_keys: revokeCallerKey on an unknown id throws NotFoundError (S-02)', async () => {
+      await expect(store.revokeCallerKey(randomUUID(), new Date().toISOString())).rejects.toThrow(
+        NotFoundError,
+      );
+    });
+
+    it('caller_keys: no column ever holds the full key material (AC8, S-02)', async () => {
+      const created = await store.insertCallerKey({
+        keyHash: uniqueSlug('hash'),
+        keyPrefix: 'otk_gh78',
+      });
+      for (const value of Object.values(created)) {
+        if (typeof value === 'string') {
+          expect(value).not.toMatch(/^otk_[A-Za-z0-9_-]{20,}$/);
+        }
+      }
+    });
+
+    // --- S-02: treasury_events ---------------------------------------------------------------------
+
+    it('treasury_events: insert -> listTreasuryEvents round-trip, most recent first (S-02)', async () => {
+      const agent = await seedAgent();
+      const first = await store.insertTreasuryEvent({
+        agentId: agent.id,
+        at: '2026-01-01T00:00:00.000Z',
+        kind: 'dry_run',
+      });
+      const second = await store.insertTreasuryEvent({
+        agentId: agent.id,
+        at: '2026-01-02T00:00:00.000Z',
+        kind: 'claim',
+        amount: '1000',
+        token: 'CREDIT',
+        usdValue: '10.000000',
+        txHash: `0x${'a'.repeat(64)}`,
+        meta: { periodIds: [1, 2, 3] },
+      });
+      expect(second.amount).toBe('1000');
+      expect(second.token).toBe('CREDIT');
+      expect(second.usdValue).toBe('10.000000');
+      expect(second.txHash).toBe(`0x${'a'.repeat(64)}`);
+      expect(second.meta).toEqual({ periodIds: [1, 2, 3] });
+
+      const list = await store.listTreasuryEvents(agent.id, 10);
+      expect(list.map((e) => e.id)).toEqual([second.id, first.id]);
+    });
+
+    it('treasury_events: listTreasuryEvents respects limit (S-02)', async () => {
+      const agent = await seedAgent();
+      for (let i = 0; i < 3; i += 1) {
+        await store.insertTreasuryEvent({
+          agentId: agent.id,
+          at: new Date().toISOString(),
+          kind: 'alert',
+        });
+      }
+      const list = await store.listTreasuryEvents(agent.id, 2);
+      expect(list).toHaveLength(2);
+    });
+
+    it('treasury_events: foreign key is enforced — an unknown agent_id is rejected (S-02)', async () => {
+      await expect(
+        store.insertTreasuryEvent({
+          agentId: randomUUID(),
+          at: new Date().toISOString(),
+          kind: 'alert',
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('treasury_events: tx_hash outside ^0x[0-9a-f]{64}$ is rejected at the store boundary (AC4, S-02)', async () => {
+      const agent = await seedAgent();
+      await expect(
+        store.insertTreasuryEvent({
+          agentId: agent.id,
+          at: new Date().toISOString(),
+          kind: 'claim',
+          txHash: '0xnothex',
+        }),
+      ).rejects.toThrow(InvalidTxHashError);
+      await expect(
+        store.insertTreasuryEvent({
+          agentId: agent.id,
+          at: new Date().toISOString(),
+          kind: 'claim',
+          txHash: `0x${'A'.repeat(64)}`, // uppercase hex — not the exact allow-listed shape
+        }),
+      ).rejects.toThrow(InvalidTxHashError);
+    });
+
+    it('treasury_events: a well-formed tx_hash is accepted (S-02)', async () => {
+      const agent = await seedAgent();
+      const txHash = `0x${'f'.repeat(64)}`;
+      const inserted = await store.insertTreasuryEvent({
+        agentId: agent.id,
+        at: new Date().toISOString(),
+        kind: 'buy',
+        txHash,
+      });
+      expect(inserted.txHash).toBe(txHash);
+    });
+
+    // --- S-02: chain_snapshots ---------------------------------------------------------------------
+
+    it('chain_snapshots: insert -> latestChainSnapshot round-trip; token/money fields byte-identical (S-02)', async () => {
+      const agent = await seedAgent();
+      const inserted = await store.insertChainSnapshot({
+        agentId: agent.id,
+        asOf: new Date().toISOString(),
+        stakedOrbio: '123456789012345678901234567890',
+        settledCredit: '500',
+        creditWallet: '250',
+        creditApiAvailable: '12.340000',
+        creditApiUsed: '1.100000',
+        quoteCreditPerUsdg: '2.222000',
+        ethBalance: '5000000000000000',
+        usdgBalance: '10000000',
+        mode: 'dry_run',
+        rpcUrlHost: 'robinhood-rpc.publicnode.com',
+      });
+      expect(inserted.stakedOrbio).toBe('123456789012345678901234567890');
+      expect(inserted.creditApiAvailable).toBe('12.340000');
+      expect(inserted.mode).toBe('dry_run');
+
+      const latest = await store.latestChainSnapshot(agent.id);
+      expect(latest).toEqual(inserted);
+    });
+
+    it('chain_snapshots: latestChainSnapshot picks the most recent as_of (S-02)', async () => {
+      const agent = await seedAgent();
+      const older = await store.insertChainSnapshot({
+        agentId: agent.id,
+        asOf: '2026-01-01T00:00:00.000Z',
+      });
+      const newer = await store.insertChainSnapshot({
+        agentId: agent.id,
+        asOf: '2026-01-01T01:00:00.000Z',
+      });
+      const latest = await store.latestChainSnapshot(agent.id);
+      expect(latest?.id).toBe(newer.id);
+      expect(latest?.id).not.toBe(older.id);
+    });
+
+    it('chain_snapshots: latestChainSnapshot returns null for an agent with no snapshots (S-02)', async () => {
+      const agent = await seedAgent();
+      expect(await store.latestChainSnapshot(agent.id)).toBeNull();
+    });
+
+    it('chain_snapshots: foreign key is enforced — an unknown agent_id is rejected (S-02)', async () => {
+      await expect(
+        store.insertChainSnapshot({ agentId: randomUUID(), asOf: new Date().toISOString() }),
+      ).rejects.toThrow();
     });
   });
 }

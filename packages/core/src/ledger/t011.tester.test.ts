@@ -223,11 +223,12 @@ describePgOrSkip('postgres setup for the tester checks', () => {
 
   beforeAll(async () => {
     await adminSql.unsafe(`
-      drop table if exists orders, book_snapshots, decisions, usage_events,
-        treasury_snapshots, key_meta, agents cascade;
+      drop table if exists chain_snapshots, treasury_events, orders, book_snapshots, decisions,
+        usage_events, treasury_snapshots, caller_keys, key_meta, agents cascade;
       drop function if exists ledger_reject_write() cascade;
       drop function if exists agents_guard_write() cascade;
       drop function if exists orders_guard_write() cascade;
+      drop function if exists caller_keys_guard_write() cascade;
     `);
     await adminSql.unsafe(
       "do $$ begin\n      if not exists (select 1 from pg_roles where rolname = 'anon') then\n        create role anon nologin;\n      end if;\n    end $$;",

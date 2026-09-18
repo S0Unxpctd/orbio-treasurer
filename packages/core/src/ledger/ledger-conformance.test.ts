@@ -44,11 +44,12 @@ describeOrSkip('postgres setup for the conformance suite', () => {
 
   beforeAll(async () => {
     await adminSql.unsafe(`
-      drop table if exists orders, book_snapshots, decisions, usage_events,
-        treasury_snapshots, key_meta, agents cascade;
+      drop table if exists chain_snapshots, treasury_events, orders, book_snapshots, decisions,
+        usage_events, treasury_snapshots, caller_keys, key_meta, agents cascade;
       drop function if exists ledger_reject_write() cascade;
       drop function if exists agents_guard_write() cascade;
       drop function if exists orders_guard_write() cascade;
+      drop function if exists caller_keys_guard_write() cascade;
     `);
     await adminSql.unsafe(
       "do $$ begin\n      if not exists (select 1 from pg_roles where rolname = 'anon') then\n        create role anon nologin;\n      end if;\n    end $$;",
@@ -56,6 +57,12 @@ describeOrSkip('postgres setup for the conformance suite', () => {
     await adminSql.unsafe(readMigration('001_schema.sql'));
     await adminSql.unsafe(readMigration('002_rls.sql'));
     await adminSql.unsafe(readMigration('003_append_only.sql'));
+    // S-02: 005 is a hand-written delta (ALTER/CREATE IF NOT EXISTS) meant to run AFTER 001-003
+    // on an already-migrated database; applying it here too (redundantly, since 001-003 already
+    // fully regenerate the new tables/columns) is exactly what the real migration order does and
+    // keeps this suite exercising 005's idempotence as a side effect (AC7 has its own dedicated
+    // test — see migration-005.test.ts).
+    await adminSql.unsafe(readMigration('005_sprint_ledger.sql'));
   });
 
   afterAll(async () => {
