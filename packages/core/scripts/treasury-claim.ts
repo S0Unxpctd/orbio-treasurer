@@ -3,20 +3,33 @@
  * `pnpm treasury:claim [--live]` — S-04, tasks/S-04.md "In scope": "CLI `pnpm treasury:claim
  * [--live]` with the same `yes-send` guard as S-05."
  *
- * Three independent gates, all required before a single `writeContract` call happens, exactly
- * mirroring S-05's `treasury-buy.ts`:
- *   1. the `--live` flag on this invocation,
+ * Gates, all required before a single `writeContract` call happens, exactly mirroring S-05's
+ * `treasury-buy.ts`:
+ *   1. `resolveCliArgs()` (chain/claim.ts) — pure argument/env resolution, checked FIRST: refuses
+ *      outright (before deriving any account, reading any balance, or touching the network) when
+ *      `STAKER_PRIVATE_KEY` is set without `TREASURER_PRIVATE_KEY` (S-04 audit pass 1, Blocker
+ *      #1 — the staker_key flow activates CREDIT to the hot wallet, and there is no
+ *      hot-address-only env var in this codebase, so this CLI must never default `hot` to the
+ *      zero address), or when neither key is set at all for a `--live` run.
  *   2. env `TREASURER_LIVE=true` (never set in this sandbox — CLAUDE.md rule 5), and
  *   3. typing exactly `yes-send` when prompted (only asked when a live send is actually about
  *      to happen — never for a dry run or a read-only manual/alert tick).
  *
  * Which flow runs depends on which env vars are set (see claim.ts's header comment):
- *   - `STAKER_PRIVATE_KEY` set -> the automated settle -> claim -> activate flow.
+ *   - `STAKER_PRIVATE_KEY` set -> the automated settle -> claim -> activate flow (requires
+ *     `TREASURER_PRIVATE_KEY` too, per gate 1 above).
  *   - only `STAKER_ADDRESS` set -> the manual read-only alert flow (never sends anything on the
  *     staker side; may still activate from hot if `TREASURER_PRIVATE_KEY` is set and hot holds
  *     CREDIT already).
  *   - `periodIdsToSettle` comes from `STAKING_SETTLE_PERIODS` (comma list) if set, else from
  *     `discoverPeriodsToSettle()` (live read-only calls) when a staker address is configured.
+ *
+ * Idempotency key = the same 15-min UTC tick bucket S-06's tick loop uses
+ * (`computeTickBucket()`, `tick/tick.ts`) — S-04 audit pass 1, Major #2: the CLI previously keyed
+ * on `new Date().toISOString()` (unique to the millisecond on every invocation), which never
+ * actually exercised `claimAndActivate()`'s own idempotency check. Two `pnpm treasury:claim
+ * --live` runs inside the same 15-minute bucket are now a replay, same as two tick firings would
+ * be.
  *
  * Ledger: every run (dry or live) goes through `claimAndActivate()`, so it leaves the same
  * `treasury_events` trail a tick would — against a `default`-slug agent in the local SQLite
@@ -33,18 +46,15 @@ import {
   parseRhRpcUrls,
   resolveClaimCaps,
   resolveClaimMaxFeeGweiCap,
+  resolveCliArgs,
 } from '../src/chain/index.js';
 import { loadEnv } from '../src/env.js';
 import { openSqliteLedger } from '../src/ledger/sqlite/store.js';
 import { redact } from '../src/redact.js';
+import { computeTickBucket } from '../src/tick/tick.js';
 
-const ZERO_ADDRESS: Address = '0x0000000000000000000000000000000000000000';
 const AGENT_SLUG = 'default';
 const CONFIRMATION_PHRASE = 'yes-send';
-
-function parseArgs(argv: readonly string[]): { readonly live: boolean } {
-  return { live: argv.includes('--live') };
-}
 
 function parsePeriodIds(raw: string | undefined): readonly bigint[] {
   if (!raw) return [];
@@ -68,34 +78,41 @@ async function confirmSend(): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
   const env = loadEnv();
+
+  // Gate 1 (S-04 audit pass 1, Blocker #1): pure, checked before any account is derived, any
+  // balance read, or the network is touched at all. See resolveCliArgs()'s own doc comment.
+  const resolution = resolveCliArgs({ env, argv: process.argv.slice(2) });
+  if (resolution.outcome === 'refuse') {
+    console.error(`refusing: ${resolution.reason}`);
+    process.exit(1);
+  }
+  const { live, treasurerLiveEnv, hasStakerKey, hasHotKey, wantsLiveSend } = resolution;
+
   const addresses = loadChainAddresses(env);
   const rpcUrls = parseRhRpcUrls(env.RH_RPC_URLS);
   const client = createRobinhoodClient(rpcUrls);
 
-  const stakerAccount = env.STAKER_PRIVATE_KEY
+  const stakerAccount = hasStakerKey
     ? privateKeyToAccount(env.STAKER_PRIVATE_KEY as `0x${string}`)
     : undefined;
-  const hotAccount = env.TREASURER_PRIVATE_KEY
+  const hotAccount = hasHotKey
     ? privateKeyToAccount(env.TREASURER_PRIVATE_KEY as `0x${string}`)
     : undefined;
-  const hot: Address = hotAccount?.address ?? ZERO_ADDRESS;
+  // Never default to the zero address (S-04 audit pass 1, Blocker #1): `hot` is only ever a real
+  // address derived from TREASURER_PRIVATE_KEY, or absent entirely. `resolveCliArgs()` above
+  // already guarantees `hasHotKey` whenever `hasStakerKey` is true, so `hot` is defined whenever
+  // the staker_key flow could run.
+  const hot: Address | undefined = hotAccount?.address;
   const staker = (env.STAKER_ADDRESS as Address | undefined) ?? stakerAccount?.address;
 
   const resolvedCaps = resolveClaimCaps({ env });
-  // Gate 1: --live is required on top of whatever env already says (CLAUDE.md rule 5 belt and
+  // Gate 2: --live is required on top of whatever env already says (CLAUDE.md rule 5 belt and
   // braces — this sandbox never has TREASURER_LIVE=true, but the CLI doesn't rely on that alone).
-  const caps = args.live ? resolvedCaps : { ...resolvedCaps, treasurerLive: false };
+  const caps = live ? resolvedCaps : { ...resolvedCaps, treasurerLive: false };
   const maxFeeGweiCap = resolveClaimMaxFeeGweiCap(env);
 
-  if (args.live && caps.treasurerLive && !stakerAccount && !hotAccount) {
-    console.error(
-      'refusing: --live requires either STAKER_PRIVATE_KEY or TREASURER_PRIVATE_KEY to be set',
-    );
-    process.exit(1);
-  }
-  if (args.live && !caps.treasurerLive) {
+  if (live && !treasurerLiveEnv) {
     console.log(
       '--live was passed but TREASURER_LIVE is not "true" in env — printing the plan only, nothing will send.',
     );
@@ -125,8 +142,14 @@ async function main(): Promise<void> {
       });
     }
 
-    const wantsLiveSend = args.live && caps.treasurerLive && (stakerAccount || hotAccount);
     if (wantsLiveSend) {
+      if (!hot) {
+        // Unreachable given resolveCliArgs()'s gate (hasStakerKey implies hasHotKey, and
+        // wantsLiveSend implies hasStakerKey || hasHotKey) — kept as a second, independent
+        // check rather than trusting that invariant alone before a real send.
+        console.error('refusing: no hot wallet address resolved — aborting before any send.');
+        process.exit(1);
+      }
       console.log(
         redact({
           about_to_send: true,
@@ -146,19 +169,22 @@ async function main(): Promise<void> {
     }
 
     const effectiveCaps = wantsLiveSend ? caps : { ...caps, treasurerLive: false };
+    // Major #2 (S-04 audit pass 1): the same 15-min UTC bucket S-06's tick loop uses, not
+    // `new Date().toISOString()` — two CLI runs in the same bucket are now a replay.
+    const idempotencyKey = `cli-${computeTickBucket(new Date())}`;
     const result = await claimAndActivate({
       store,
       agentId: agent.id,
       client,
       addresses,
-      hot,
+      ...(hot ? { hot } : {}),
       ...(staker ? { staker } : {}),
       ...(wantsLiveSend && stakerAccount ? { account: stakerAccount } : {}),
       ...(wantsLiveSend && hotAccount ? { hotAccount } : {}),
       periodIdsToSettle,
       caps: effectiveCaps,
       maxFeeGweiCap,
-      idempotencyKey: `cli-${new Date().toISOString()}`,
+      idempotencyKey,
     });
 
     console.log(JSON.stringify(redact(result), null, 2));

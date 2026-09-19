@@ -31,7 +31,7 @@
  * activates, per UTC calendar day, across every leg — never per-leg.
  */
 import type { Abi, Account, Address, Hex, TransactionReceipt } from 'viem';
-import { parseEther, parseGwei } from 'viem';
+import { getAddress, parseEther, parseGwei } from 'viem';
 import type { Env } from '../env.js';
 import { parseDecimal } from '../ledger/decimal.js';
 import type { Id, LedgerStore } from '../ledger/types.js';
@@ -66,6 +66,44 @@ export const DEFAULT_MIN_GAS_ETH = '0.0005';
  *  sequential txs (`settle` + `claim` + `activate`), rather than reusing the single-tx default
  *  and under-covering it. */
 export const DEFAULT_STAKER_MIN_GAS_ETH = '0.0015';
+
+export const ZERO_ADDRESS: Address = '0x0000000000000000000000000000000000000000';
+
+/**
+ * Thrown by `executeClaim()`/`claimAndActivate()` (S-04 audit pass 1, Blocker #1) when `hot` —
+ * the beneficiary `CREDIT.activate(amount, bytes32(hot))` mints to — is the zero address or not
+ * a valid checksummed address. A wrong `hot` here is an irreversible burn, not a delivery to the
+ * Treasurer's API balance: this must be impossible, never a silently-encoded default.
+ */
+export class InvalidBeneficiaryError extends Error {
+  readonly hot: string;
+
+  constructor(hot: string) {
+    super(
+      `invalid CREDIT.activate() beneficiary: hot="${hot}" is the zero address or not a valid ` +
+        'checksummed address — refusing before any write (S-04 audit pass 1, Blocker #1)',
+    );
+    this.name = 'InvalidBeneficiaryError';
+    this.hot = hot;
+  }
+}
+
+/**
+ * `hot` must be a real, checksum-valid, non-zero address before it is ever encoded as
+ * `CREDIT.activate()`'s beneficiary (`addressToBytes32`) — a zero or malformed value there mints
+ * CREDIT to an unrecoverable address (S-04 audit pass 1, Blocker #1). Uses viem's `getAddress()`,
+ * the same checksum-validation `contracts.ts`'s `loadChainAddresses()` already relies on
+ * elsewhere in this codebase: it accepts an all-lowercase address unchanged and re-checksums a
+ * mixed-case one that already matches, and throws only on a genuinely wrong checksum or a
+ * wrong-length string.
+ */
+export function isValidBeneficiary(hot: Address): boolean {
+  try {
+    return getAddress(hot) !== ZERO_ADDRESS;
+  } catch {
+    return false;
+  }
+}
 
 export interface ClaimCaps {
   /** Mirrors env `TREASURER_LIVE` (CLAUDE.md rule 5) — `false` in every sandbox run. */
@@ -163,7 +201,7 @@ export interface ClaimHistoryInput {
   readonly activatedToday: readonly { readonly at: string; readonly amount: bigint }[];
 }
 
-export type ClaimRefusalReason = 'insufficient_gas_balance';
+export type ClaimRefusalReason = 'insufficient_gas_balance' | 'invalid_beneficiary';
 
 export interface ClaimRefusal {
   readonly kind: 'refusal';
@@ -206,7 +244,13 @@ export type ManualAlertStep = 'settle' | 'claim' | 'transfer';
 export interface ManualAlertPlan {
   readonly kind: 'manual_alert';
   readonly step: ManualAlertStep;
+  /** `step`-dependent (S-04 audit pass 1, Major #3): the pending `rewardOf` total for
+   *  `periodIds` when `step === 'settle'`; `settledOf(staker)` when `step === 'claim'`;
+   *  `CREDIT.balanceOf(staker)` when `step === 'transfer'`. */
   readonly amount: bigint;
+  /** Only set when `step === 'settle'` — the exact period ids this manual to-do covers (S-04
+   *  audit pass 1, Major #3: "must carry the periods to settle"). */
+  readonly periodIds?: readonly bigint[];
 }
 
 export interface HotActivatePlan {
@@ -230,6 +274,10 @@ export type PlanClaimInput =
       readonly settledCredit: bigint;
       readonly creditBalanceStaker: bigint;
       readonly stakerEthWei: bigint;
+      /** The `activate(amount, bytes32(hot))` beneficiary this plan would encode — checked
+       *  before the gas floor (S-04 audit pass 1, Blocker #1: "planClaim refuses with a
+       *  reason"). */
+      readonly hot: Address;
       readonly caps: ClaimCaps;
       readonly history: ClaimHistoryInput;
       readonly now: Date;
@@ -237,6 +285,10 @@ export type PlanClaimInput =
   | {
       readonly kind: 'manual';
       readonly periodIdsToSettle: readonly bigint[];
+      /** Sum of `rewardOf(staker, id)` over `periodIdsToSettle` (S-04 audit pass 1, Major #3) —
+       *  the amount the `'settle'` alert reports, never `settledCredit`. Ignored (may be `0n`)
+       *  when `periodIdsToSettle` is empty. */
+      readonly periodRewardTotal: bigint;
       readonly settledCredit: bigint;
       readonly creditBalanceStaker: bigint;
     }
@@ -277,7 +329,12 @@ export function planClaim(input: PlanClaimInput): ClaimPlan {
     // priority — you must settle before you can claim, and claim before you can transfer/
     // activate, so the earliest unfinished pipeline step is always the one reported.
     if (input.periodIdsToSettle.length > 0) {
-      return { kind: 'manual_alert', step: 'settle', amount: input.settledCredit };
+      return {
+        kind: 'manual_alert',
+        step: 'settle',
+        amount: input.periodRewardTotal,
+        periodIds: input.periodIdsToSettle,
+      };
     }
     if (input.settledCredit > 0n) {
       return { kind: 'manual_alert', step: 'claim', amount: input.settledCredit };
@@ -334,6 +391,15 @@ export function planClaim(input: PlanClaimInput): ClaimPlan {
     return {
       kind: 'no_op',
       detail: 'nothing claimable: settledCredit=0, creditBalanceStaker=0, no unsettled periods',
+    };
+  }
+  // S-04 audit pass 1, Blocker #1: refuse before the gas-floor check (and well before any
+  // write) rather than plan an activate() that would encode a zero/malformed beneficiary.
+  if (!isValidBeneficiary(input.hot)) {
+    return {
+      kind: 'refusal',
+      reason: 'invalid_beneficiary',
+      detail: `hot="${input.hot}" is the zero address or not a valid checksummed address — refusing to plan an activate() that would mint CREDIT to it`,
     };
   }
   if (input.stakerEthWei < input.caps.minGasWeiStaker) {
@@ -447,6 +513,10 @@ export async function discoverLatestPeriodId(
 
 export interface DiscoverPeriodsToSettleOptions extends DiscoverLatestPeriodIdOptions {
   readonly maxPeriodsBack?: number;
+  /** Clock for the `periodEnd < now` finalization guard below (S-04 audit pass 1, Minor #4).
+   *  Defaults to `new Date()` — injectable so tests can place a period's end on either side of
+   *  the boundary deterministically. */
+  readonly now?: Date;
 }
 
 /**
@@ -472,6 +542,7 @@ export async function discoverPeriodsToSettle(
   if (latest === null) return [];
   const maxBack = BigInt(options.maxPeriodsBack ?? DISCOVERY_MAX_PERIODS_BACK);
   const floor = latest - maxBack + 1n > 1n ? latest - maxBack + 1n : 1n;
+  const nowSec = BigInt(Math.floor((options.now ?? new Date()).getTime() / 1000));
 
   const ids: bigint[] = [];
   for (let id = floor; id <= latest; id += 1n) {
@@ -482,7 +553,23 @@ export async function discoverPeriodsToSettle(
         functionName: 'rewardOf',
         args: [staker, id],
       })) as bigint;
-      if (reward > 0n) ids.push(id);
+      if (reward === 0n) continue;
+      // S-04 audit pass 1, Minor #4: "exists" alone doesn't imply "finalized" — the ticket
+      // accepts settling an unfinalized id as "fine" (Staking.settle() reverts), but a revert
+      // takes the WHOLE batch down with it (executeClaim throws before claim() ever runs) and
+      // silently loses a tick's ledger row. Confirm `rewardPeriod(id)`'s periodEnd (field[1], the
+      // one live-verified field, docs/api-notes.md "S-04 period discovery") is actually in the
+      // past before sweeping this id into the settle batch.
+      const periodFields = (await client.readContract({
+        address: addresses.staking,
+        abi: stakingAbi,
+        functionName: 'rewardPeriod',
+        args: [id],
+      })) as readonly bigint[];
+      const periodEnd = periodFields[1];
+      if (periodEnd !== undefined && periodEnd < nowSec) {
+        ids.push(id);
+      }
     } catch {
       // An id inside [floor, latest] was already confirmed to exist by discoverLatestPeriodId's
       // own search — this shouldn't revert, but one bad read must never abort the whole scan.
@@ -605,6 +692,13 @@ export async function executeClaim(
     throw new Error(
       'executeClaim: refused — plan.dryRun is true (call only when caps.treasurerLive)',
     );
+  }
+  // S-04 audit pass 1, Blocker #1: `deps.hot` is encoded straight into the activate() step's
+  // beneficiary below — validate it BEFORE any write, unconditionally (not only when
+  // `plan.activateAmount > 0n`), since a caller with a broken `hot` should never get even the
+  // settle/claim steps sent for it.
+  if (!isValidBeneficiary(deps.hot)) {
+    throw new InvalidBeneficiaryError(deps.hot);
   }
   const { client, account, addresses, maxFeeGweiCap } = deps;
   if (!client.writeContract || !client.waitForTransactionReceipt) {
@@ -795,7 +889,15 @@ export interface ClaimAndActivateDeps {
    *  dry-run. */
   readonly client: ClaimExecClient;
   readonly addresses: ChainAddresses;
-  readonly hot: Address;
+  /** The hot wallet's address — the beneficiary the `staker_key` leg activates CREDIT to, and
+   *  the address the independent `hot_activate` leg reads/activates from. Optional: there is no
+   *  hot-address-only env var in this codebase, only `TREASURER_PRIVATE_KEY` — a caller with no
+   *  hot wallet configured at all (e.g. only `STAKER_ADDRESS`, no `TREASURER_PRIVATE_KEY`) omits
+   *  this rather than fabricating a zero-address placeholder (S-04 audit pass 1, Blocker #1:
+   *  "never default hot to zero"). `deps.account` set with `hot` unset/invalid throws
+   *  `InvalidBeneficiaryError` before any read or write for that leg; `hot` unset with
+   *  `deps.account` unset simply skips the `hot_activate` leg. */
+  readonly hot?: Address;
   /** `STAKER_ADDRESS`, if set — the wallet whose `settledOf`/`CREDIT.balanceOf` are read for
    *  both the `staker_key` and `manual` flows. */
   readonly staker?: Address;
@@ -825,7 +927,6 @@ export interface ClaimAndActivateDeps {
 }
 
 const DEFAULT_EVENT_LOOKBACK = 200;
-const ZERO_ADDRESS: Address = '0x0000000000000000000000000000000000000000';
 const EXPLORER_BASE = 'https://robin.etherscan.io';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -892,6 +993,7 @@ export interface ClaimAndActivateResult {
 async function runStakerKeyLeg(
   deps: ClaimAndActivateDeps,
   account: Account,
+  hot: Address,
   staker: Address,
   history: ClaimHistoryInput,
   now: Date,
@@ -919,6 +1021,7 @@ async function runStakerKeyLeg(
     settledCredit: settledRaw as bigint,
     creditBalanceStaker: creditStakerRaw as bigint,
     stakerEthWei,
+    hot,
     caps: deps.caps,
     history,
     now,
@@ -952,7 +1055,7 @@ async function runStakerKeyLeg(
     client: deps.client,
     account,
     addresses: deps.addresses,
-    hot: deps.hot,
+    hot,
     maxFeeGweiCap,
   });
 
@@ -994,12 +1097,37 @@ async function runStakerKeyLeg(
   return { leg: 'staker', status: 'executed', result: executed };
 }
 
+/** Sum of `rewardOf(staker, id)` over `periodIds` (S-04 audit pass 1, Major #3) — the pending
+ *  reward total for the periods a `'settle'` manual alert names, as opposed to `settledOf`
+ *  (already-settled-but-unclaimed, a different number entirely). `0n` with zero reads when
+ *  `periodIds` is empty. */
+async function sumRewardOfPeriods(
+  client: ClaimReadClient,
+  addresses: ChainAddresses,
+  staker: Address,
+  periodIds: readonly bigint[],
+): Promise<bigint> {
+  if (periodIds.length === 0) return 0n;
+  const rewards = await Promise.all(
+    periodIds.map(
+      (id) =>
+        client.readContract({
+          address: addresses.staking,
+          abi: stakingAbi,
+          functionName: 'rewardOf',
+          args: [staker, id],
+        }) as Promise<bigint>,
+    ),
+  );
+  return rewards.reduce((sum, reward) => sum + reward, 0n);
+}
+
 async function runManualLeg(
   deps: ClaimAndActivateDeps,
   staker: Address,
   now: Date,
 ): Promise<ClaimLegResult> {
-  const [settledRaw, creditStakerRaw] = await Promise.all([
+  const [settledRaw, creditStakerRaw, periodRewardTotal] = await Promise.all([
     deps.client.readContract({
       address: deps.addresses.staking,
       abi: stakingAbi,
@@ -1012,11 +1140,13 @@ async function runManualLeg(
       functionName: 'balanceOf',
       args: [staker],
     }),
+    sumRewardOfPeriods(deps.client, deps.addresses, staker, deps.periodIdsToSettle),
   ]);
 
   const plan = planClaim({
     kind: 'manual',
     periodIdsToSettle: deps.periodIdsToSettle,
+    periodRewardTotal,
     settledCredit: settledRaw as bigint,
     creditBalanceStaker: creditStakerRaw as bigint,
   });
@@ -1034,6 +1164,7 @@ async function runManualLeg(
       manual: {
         step: plan.step,
         amount: plan.amount.toString(),
+        ...(plan.periodIds ? { periodIds: plan.periodIds.map((id) => id.toString()) } : {}),
         explorerWriteUrl: explorerWriteUrl(plan.step, deps.addresses),
       },
       idempotencyKey: deps.idempotencyKey,
@@ -1044,6 +1175,7 @@ async function runManualLeg(
 
 async function runHotLeg(
   deps: ClaimAndActivateDeps,
+  hot: Address,
   history: ClaimHistoryInput,
   now: Date,
   maxFeeGweiCap: number,
@@ -1053,9 +1185,9 @@ async function runHotLeg(
       address: deps.addresses.credit,
       abi: erc20Abi,
       functionName: 'balanceOf',
-      args: [deps.hot],
+      args: [hot],
     }),
-    deps.client.getBalance({ address: deps.hot }),
+    deps.client.getBalance({ address: hot }),
   ]);
 
   const plan = planClaim({
@@ -1174,9 +1306,17 @@ export async function claimAndActivate(
   const staker = deps.staker ?? ZERO_ADDRESS;
 
   if (deps.account) {
+    // S-04 audit pass 1, Blocker #1: the staker_key leg signs
+    // CREDIT.activate(amount, bytes32(hot)) — validate BEFORE any read or write for this leg
+    // (not just before executeClaim's own writeContract call: defense in depth, since
+    // executeClaim can also be called directly, as claim.test.ts's AC2 suite does).
+    if (!deps.hot || !isValidBeneficiary(deps.hot)) {
+      throw new InvalidBeneficiaryError(deps.hot ?? ZERO_ADDRESS);
+    }
     const legResult = await runStakerKeyLeg(
       deps,
       deps.account,
+      deps.hot,
       staker,
       history,
       now,
@@ -1189,7 +1329,10 @@ export async function claimAndActivate(
   if (deps.staker && deps.staker !== ZERO_ADDRESS) {
     legs.push(await runManualLeg(deps, staker, now));
   }
-  const hotLeg = await runHotLeg(deps, history, now, maxFeeGweiCap);
+  // No hot-address-only env var exists (Blocker #1) — when the caller has no hot wallet
+  // configured at all, `deps.hot` is simply unset and this leg is skipped entirely, rather than
+  // reading/activating against a fabricated zero address.
+  const hotLeg = deps.hot ? await runHotLeg(deps, deps.hot, history, now, maxFeeGweiCap) : null;
   if (hotLeg) legs.push(hotLeg);
 
   if (legs.length === 0) {
@@ -1201,4 +1344,71 @@ export async function claimAndActivate(
   }
 
   return { idempotentReplay: false, legs };
+}
+
+// --- CLI argument resolution (pure, testable seam for treasury-claim.ts) ------------------------
+
+export interface ResolveCliArgsInput {
+  readonly env: Pick<Env, 'TREASURER_LIVE' | 'STAKER_PRIVATE_KEY' | 'TREASURER_PRIVATE_KEY'>;
+  readonly argv: readonly string[];
+}
+
+export type CliResolution =
+  | { readonly outcome: 'refuse'; readonly reason: string }
+  | {
+      readonly outcome: 'run';
+      readonly live: boolean;
+      readonly treasurerLiveEnv: boolean;
+      readonly hasStakerKey: boolean;
+      readonly hasHotKey: boolean;
+      /** `true` only when this run will actually attempt to send: `--live` AND
+       *  `TREASURER_LIVE=true` AND at least one signing key is present. */
+      readonly wantsLiveSend: boolean;
+    };
+
+/**
+ * Pure argument/env resolution for `pnpm treasury:claim [--live]` (S-04 audit pass 1, Blocker #1
+ * + fix item 1's CLI-level unit-test requirement). Extracted out of `main()` so the refusal logic
+ * is unit-testable without touching a real key, the network or stdin.
+ *
+ * The ONLY source of a hot-wallet address anywhere in this codebase is `TREASURER_PRIVATE_KEY`
+ * (`privateKeyToAccount`, `chain/key.ts`) — there is no separate hot-address-only env var. The
+ * `staker_key` flow signs `CREDIT.activate(amount, bytes32(hot))`, so `STAKER_PRIVATE_KEY` alone,
+ * without `TREASURER_PRIVATE_KEY`, can never safely run it: refusing outright here — live or
+ * dry-run — is what makes "never default hot to zero" hold at the CLI, on top of the
+ * library-level `InvalidBeneficiaryError` checks in `claimAndActivate()`/`executeClaim()` above.
+ */
+export function resolveCliArgs(input: ResolveCliArgsInput): CliResolution {
+  const live = input.argv.includes('--live');
+  const hasStakerKey = Boolean(input.env.STAKER_PRIVATE_KEY);
+  const hasHotKey = Boolean(input.env.TREASURER_PRIVATE_KEY);
+  const treasurerLiveEnv = input.env.TREASURER_LIVE === true;
+
+  if (hasStakerKey && !hasHotKey) {
+    return {
+      outcome: 'refuse',
+      reason:
+        'STAKER_PRIVATE_KEY is set but TREASURER_PRIVATE_KEY is not. The staker_key flow ' +
+        'activates CREDIT to the hot wallet (CREDIT.activate(amount, bytes32(hot))), and there ' +
+        'is no way to know a real hot address without TREASURER_PRIVATE_KEY — refusing rather ' +
+        'than defaulting hot to the zero address. Set TREASURER_PRIVATE_KEY, or unset ' +
+        'STAKER_PRIVATE_KEY to run the manual/hot_activate flow only.',
+    };
+  }
+
+  if (live && treasurerLiveEnv && !hasStakerKey && !hasHotKey) {
+    return {
+      outcome: 'refuse',
+      reason: '--live requires either STAKER_PRIVATE_KEY or TREASURER_PRIVATE_KEY to be set.',
+    };
+  }
+
+  return {
+    outcome: 'run',
+    live,
+    treasurerLiveEnv,
+    hasStakerKey,
+    hasHotKey,
+    wantsLiveSend: live && treasurerLiveEnv && (hasStakerKey || hasHotKey),
+  };
 }

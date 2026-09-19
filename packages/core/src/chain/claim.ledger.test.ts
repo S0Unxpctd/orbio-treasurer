@@ -13,7 +13,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openSqliteLedger } from '../ledger/sqlite/store.js';
 import type { LedgerStore } from '../ledger/types.js';
 import type { ClaimAndActivateDeps, ClaimCaps, ClaimExecClient } from './claim.js';
-import { claimAndActivate, resolveClaimCaps } from './claim.js';
+import {
+  claimAndActivate,
+  InvalidBeneficiaryError,
+  resolveClaimCaps,
+  ZERO_ADDRESS,
+} from './claim.js';
 import { creditAbi } from './contracts.js';
 
 const HOT: Address = '0x1111111111111111111111111111111111111111';
@@ -55,9 +60,16 @@ function fakeClientWithBalances(opts: {
   creditBalanceHot?: bigint;
   stakerEthWei?: bigint;
   hotEthWei?: bigint;
+  /** `rewardOf(staker, id)` per period id (S-04 audit pass 1, Major #3's `sumRewardOfPeriods` —
+   *  keyed by `id.toString()`; any id not listed returns `0n`). */
+  rewardOfByPeriod?: Record<string, bigint>;
 }): { client: ClaimExecClient; writeContract: ReturnType<typeof vi.fn> } {
   const readContract = vi.fn(async (args: { functionName: string; args: readonly unknown[] }) => {
     if (args.functionName === 'settledOf') return opts.settledOf ?? 0n;
+    if (args.functionName === 'rewardOf') {
+      const id = args.args[1] as bigint;
+      return opts.rewardOfByPeriod?.[id.toString()] ?? 0n;
+    }
     if (args.functionName === 'balanceOf') {
       const target = (args.args[0] as string).toLowerCase();
       if (target === STAKER.toLowerCase()) return opts.creditBalanceStaker ?? 0n;
@@ -246,7 +258,7 @@ describe('claimAndActivate — ledger rows (S-04 AC3, AC4, AC5)', () => {
     expect(rows).toHaveLength(0);
   });
 
-  it('manual leg: settledOf > 0 -> exactly ONE alert row with meta.manual.step="claim"', async () => {
+  it('manual leg: settledOf > 0 -> exactly ONE alert row with meta.manual.step="claim", amount=settledOf', async () => {
     const agentId = await seedAgent();
     const { client } = fakeClientWithBalances({ settledOf: 5_000_000n, creditBalanceHot: 0n });
     const result = await claimAndActivate({
@@ -266,10 +278,77 @@ describe('claimAndActivate — ledger rows (S-04 AC3, AC4, AC5)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.kind).toBe('alert');
     const manual = (
-      rows[0]?.meta as { manual?: { step?: string; explorerWriteUrl?: string } } | null
+      rows[0]?.meta as {
+        manual?: {
+          step?: string;
+          amount?: string;
+          periodIds?: string[];
+          explorerWriteUrl?: string;
+        };
+      } | null
     )?.manual;
     expect(manual?.step).toBe('claim');
+    expect(manual?.amount).toBe('5000000'); // settledOf(staker) — S-04 audit pass 1, Major #3
+    expect(manual?.periodIds).toBeUndefined();
     expect(manual?.explorerWriteUrl).toMatch(/^https:\/\/robin\.etherscan\.io\/address\//);
+  });
+
+  it('manual leg: settledOf 0, CREDIT.balanceOf(staker) > 0 -> step="transfer", amount=CREDIT.balanceOf(staker) (S-04 audit pass 1, Major #3)', async () => {
+    const agentId = await seedAgent();
+    const { client } = fakeClientWithBalances({
+      settledOf: 0n,
+      creditBalanceStaker: 7_000_000n,
+      creditBalanceHot: 0n,
+    });
+    await claimAndActivate({
+      store,
+      agentId,
+      client,
+      addresses: ADDRESSES,
+      hot: HOT,
+      staker: STAKER,
+      periodIdsToSettle: [],
+      caps: dryCaps(),
+      idempotencyKey: 'tick-6b',
+    });
+    const rows = await store.listTreasuryEvents(agentId, 50);
+    expect(rows).toHaveLength(1);
+    const manual = (rows[0]?.meta as { manual?: { step?: string; amount?: string } } | null)
+      ?.manual;
+    expect(manual?.step).toBe('transfer');
+    expect(manual?.amount).toBe('7000000');
+  });
+
+  it('manual leg: unsettled periods exist -> step="settle", amount=rewardOf sum for periodIds (NOT settledOf), periodIds carried in the ledger row (S-04 audit pass 1, Major #3)', async () => {
+    const agentId = await seedAgent();
+    // settledOf is deliberately 0 — the pre-fix bug reported "step: settle, amount: 0" here.
+    const { client } = fakeClientWithBalances({
+      settledOf: 0n,
+      creditBalanceStaker: 0n,
+      creditBalanceHot: 0n,
+      rewardOfByPeriod: { '10': 4_000_000n, '11': 5_000_000n },
+    });
+    const result = await claimAndActivate({
+      store,
+      agentId,
+      client,
+      addresses: ADDRESSES,
+      hot: HOT,
+      staker: STAKER,
+      periodIdsToSettle: [10n, 11n],
+      caps: dryCaps(),
+      idempotencyKey: 'tick-6c',
+    });
+    const stakerLeg = result.legs.find((l) => l.leg === 'staker');
+    expect(stakerLeg?.status).toBe('alerted');
+    const rows = await store.listTreasuryEvents(agentId, 50);
+    expect(rows).toHaveLength(1);
+    const manual = (
+      rows[0]?.meta as { manual?: { step?: string; amount?: string; periodIds?: string[] } } | null
+    )?.manual;
+    expect(manual?.step).toBe('settle');
+    expect(manual?.amount).toBe('9000000'); // 4_000_000 + 5_000_000, never settledOf (0)
+    expect(manual?.periodIds).toEqual(['10', '11']);
   });
 
   it('manual leg + independent hot_activate leg can BOTH fire in the same tick', async () => {
@@ -369,5 +448,95 @@ describe('claimAndActivate — ledger rows (S-04 AC3, AC4, AC5)', () => {
     expect(rows).toHaveLength(3);
     const serialized = JSON.stringify(rows);
     expect(serialized).not.toContain(FAKE_PK);
+  });
+
+  it('S-04 audit pass 1, Blocker #1: staker_key leg with a zero-address hot throws InvalidBeneficiaryError, no writeContract call, no ledger row', async () => {
+    const agentId = await seedAgent();
+    const { client, writeContract } = fakeClientWithBalances({
+      settledOf: 10_000_000n,
+      creditBalanceStaker: 2_000_000n,
+    });
+    let caught: unknown;
+    try {
+      await claimAndActivate({
+        store,
+        agentId,
+        client,
+        addresses: ADDRESSES,
+        hot: ZERO_ADDRESS,
+        staker: STAKER,
+        account: { address: STAKER } as never,
+        periodIdsToSettle: [10n, 11n],
+        caps: liveCaps(),
+        idempotencyKey: 'tick-11',
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(InvalidBeneficiaryError);
+    expect(writeContract).not.toHaveBeenCalled();
+    const rows = await store.listTreasuryEvents(agentId, 50);
+    expect(rows).toHaveLength(0);
+  });
+
+  it('S-04 audit pass 1, Blocker #1: staker_key leg with hot entirely UNSET also throws InvalidBeneficiaryError before any read or write', async () => {
+    const agentId = await seedAgent();
+    const { client, writeContract } = fakeClientWithBalances({
+      settledOf: 10_000_000n,
+      creditBalanceStaker: 2_000_000n,
+    });
+    const readContract = client.readContract as ReturnType<typeof vi.fn>;
+    let caught: unknown;
+    try {
+      const deps: ClaimAndActivateDeps = {
+        store,
+        agentId,
+        client,
+        addresses: ADDRESSES,
+        staker: STAKER,
+        account: { address: STAKER } as never,
+        periodIdsToSettle: [10n, 11n],
+        caps: liveCaps(),
+        idempotencyKey: 'tick-12',
+      };
+      await claimAndActivate(deps);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(InvalidBeneficiaryError);
+    expect(writeContract).not.toHaveBeenCalled();
+    expect(readContract).not.toHaveBeenCalled(); // fails before even the staker's own balance reads
+    const rows = await store.listTreasuryEvents(agentId, 50);
+    expect(rows).toHaveLength(0);
+  });
+
+  it('hot unset with NO staker_key (manual/hot_activate only): the hot_activate leg is skipped, never reads/activates against a zero address', async () => {
+    const agentId = await seedAgent();
+    const { client, writeContract } = fakeClientWithBalances({ settledOf: 5_000_000n });
+    const readContract = client.readContract as ReturnType<typeof vi.fn>;
+    const result = await claimAndActivate({
+      store,
+      agentId,
+      client,
+      addresses: ADDRESSES,
+      staker: STAKER,
+      periodIdsToSettle: [],
+      caps: dryCaps(),
+      idempotencyKey: 'tick-13',
+    });
+    // Only the manual leg ran (alerted); no 'hot' leg entry at all — runHotLeg was never called.
+    expect(result.legs).toEqual([
+      { leg: 'staker', status: 'alerted', step: 'claim', amount: '5000000' },
+    ]);
+    // Every readContract call made was for the STAKER, never for a fabricated zero-address hot.
+    for (const call of readContract.mock.calls) {
+      const args = call[0] as { args: readonly unknown[] };
+      for (const arg of args.args) {
+        if (typeof arg === 'string' && arg.startsWith('0x')) {
+          expect(arg.toLowerCase()).not.toBe(ZERO_ADDRESS.toLowerCase());
+        }
+      }
+    }
+    expect(writeContract).not.toHaveBeenCalled();
   });
 });

@@ -52,6 +52,7 @@ export type {
   ClaimRefusalReason,
   ClaimStep,
   ClaimStepResult,
+  CliResolution,
   DiscoverLatestPeriodIdOptions,
   DiscoverPeriodsToSettleOptions,
   ExecuteActivateFromHotDeps,
@@ -61,6 +62,7 @@ export type {
   NoOpClaimPlan,
   PlanClaimInput,
   ResolveClaimCapsOptions,
+  ResolveCliArgsInput,
   SettleClaimActivatePlan,
 } from './claim.js';
 export {
@@ -74,8 +76,11 @@ export {
   discoverPeriodsToSettle,
   executeActivateFromHot,
   executeClaim,
+  InvalidBeneficiaryError,
+  isValidBeneficiary,
   planClaim,
   resolveClaimCaps,
+  resolveCliArgs,
   resolveMaxFeeGweiCap as resolveClaimMaxFeeGweiCap,
 } from './claim.js';
 export type { ChainAddresses } from './contracts.js';

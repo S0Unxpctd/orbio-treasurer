@@ -23,9 +23,12 @@ import {
   discoverPeriodsToSettle,
   executeActivateFromHot,
   executeClaim,
+  InvalidBeneficiaryError,
   planClaim,
   resolveClaimCaps,
+  resolveCliArgs,
   resolveMaxFeeGweiCap,
+  ZERO_ADDRESS,
 } from './claim.js';
 import { creditAbi } from './contracts.js';
 
@@ -108,6 +111,7 @@ describe('planClaim — staker_key flow (AC1: dry-run / no-op / capped / gas flo
         settledCredit: 10_000_000n,
         creditBalanceStaker: 0n,
         stakerEthWei: 10n ** 18n,
+        hot: HOT,
         caps: caps({ treasurerLive: false }),
         history: { activatedToday: [] },
         now: NOW,
@@ -126,6 +130,7 @@ describe('planClaim — staker_key flow (AC1: dry-run / no-op / capped / gas flo
         settledCredit: 10_000_000n,
         creditBalanceStaker: 2_000_000n,
         stakerEthWei: 10n ** 18n,
+        hot: HOT,
         caps: caps({ treasurerLive: true }),
         history: { activatedToday: [] },
         now: NOW,
@@ -145,6 +150,7 @@ describe('planClaim — staker_key flow (AC1: dry-run / no-op / capped / gas flo
         settledCredit: 0n,
         creditBalanceStaker: 0n,
         stakerEthWei: 10n ** 18n,
+        hot: HOT,
         caps: caps(),
         history: { activatedToday: [] },
         now: NOW,
@@ -161,6 +167,7 @@ describe('planClaim — staker_key flow (AC1: dry-run / no-op / capped / gas flo
         settledCredit: 0n,
         creditBalanceStaker: 0n,
         stakerEthWei: 10n ** 18n,
+        hot: HOT,
         caps: caps(),
         history: { activatedToday: [] },
         now: NOW,
@@ -178,6 +185,7 @@ describe('planClaim — staker_key flow (AC1: dry-run / no-op / capped / gas flo
         settledCredit: 40_000_000n,
         creditBalanceStaker: 30_000_000n, // total claimable 70 CREDIT > 50 CREDIT cap
         stakerEthWei: 10n ** 18n,
+        hot: HOT,
         caps: caps({ activateMaxPerDayAtoms: 50_000_000n }),
         history: { activatedToday: [] },
         now: NOW,
@@ -195,6 +203,7 @@ describe('planClaim — staker_key flow (AC1: dry-run / no-op / capped / gas flo
         settledCredit: 30_000_000n,
         creditBalanceStaker: 0n,
         stakerEthWei: 10n ** 18n,
+        hot: HOT,
         caps: caps({ activateMaxPerDayAtoms: 50_000_000n }),
         history: { activatedToday: [{ at: '2026-09-19T01:00:00.000Z', amount: 45_000_000n }] },
         now: NOW,
@@ -212,6 +221,7 @@ describe('planClaim — staker_key flow (AC1: dry-run / no-op / capped / gas flo
         settledCredit: 10_000_000n,
         creditBalanceStaker: 0n,
         stakerEthWei: 10n ** 18n,
+        hot: HOT,
         caps: caps({ activateMaxPerDayAtoms: 50_000_000n }),
         history: { activatedToday: [{ at: '2026-09-18T23:59:59.000Z', amount: 45_000_000n }] },
         now: NOW,
@@ -228,6 +238,7 @@ describe('planClaim — staker_key flow (AC1: dry-run / no-op / capped / gas flo
         settledCredit: 10_000_000n,
         creditBalanceStaker: 0n,
         stakerEthWei: 1n,
+        hot: HOT,
         caps: caps(),
         history: { activatedToday: [] },
         now: NOW,
@@ -244,6 +255,7 @@ describe('planClaim — staker_key flow (AC1: dry-run / no-op / capped / gas flo
         settledCredit: 10_000_000n,
         creditBalanceStaker: 0n,
         stakerEthWei: 1n,
+        hot: HOT,
         caps: caps({ treasurerLive: false }),
         history: { activatedToday: [] },
         now: NOW,
@@ -256,6 +268,7 @@ describe('planClaim — staker_key flow (AC1: dry-run / no-op / capped / gas flo
         settledCredit: 10_000_000n,
         creditBalanceStaker: 0n,
         stakerEthWei: 1n,
+        hot: HOT,
         caps: caps({ treasurerLive: true }),
         history: { activatedToday: [] },
         now: NOW,
@@ -272,51 +285,108 @@ describe('planClaim — staker_key flow (AC1: dry-run / no-op / capped / gas flo
       settledCredit: 10_000_000n,
       creditBalanceStaker: 0n,
       stakerEthWei: 1_500_000_000_000_000n,
+      hot: HOT,
       caps: caps({ minGasWeiStaker: 1_500_000_000_000_000n }),
       history: { activatedToday: [] },
       now: NOW,
     });
     expect(result.kind).toBe('settle_claim_activate');
   });
+
+  it('10b. zero-address hot -> invalid_beneficiary refusal, checked before the gas floor (S-04 audit pass 1, Blocker #1)', () => {
+    const refusal = expectRefusal(
+      planClaim({
+        kind: 'staker_key',
+        periodIdsToSettle: [],
+        settledCredit: 10_000_000n,
+        creditBalanceStaker: 0n,
+        stakerEthWei: 10n ** 18n,
+        hot: ZERO_ADDRESS,
+        caps: caps(),
+        history: { activatedToday: [] },
+        now: NOW,
+      }),
+    );
+    expect(refusal.reason).toBe('invalid_beneficiary');
+  });
+
+  it('10c. malformed (non-checksummed / wrong-length) hot -> invalid_beneficiary refusal', () => {
+    const refusal = expectRefusal(
+      planClaim({
+        kind: 'staker_key',
+        periodIdsToSettle: [],
+        settledCredit: 10_000_000n,
+        creditBalanceStaker: 0n,
+        stakerEthWei: 10n ** 18n,
+        hot: '0xnotanaddress' as Address,
+        caps: caps(),
+        history: { activatedToday: [] },
+        now: NOW,
+      }),
+    );
+    expect(refusal.reason).toBe('invalid_beneficiary');
+  });
 });
 
 describe('planClaim — manual flow (AC1: staker key absent -> manual alert with correct step)', () => {
-  it('11. unsettled periods exist -> step "settle"', () => {
+  it('11. unsettled periods exist -> step "settle", amount = periodRewardTotal (NOT settledCredit), periodIds carried (S-04 audit pass 1, Major #3)', () => {
     const plan = expectManualAlert(
       planClaim({
         kind: 'manual',
         periodIdsToSettle: [3n, 4n],
+        periodRewardTotal: 9_000_000n,
         settledCredit: 5_000_000n,
         creditBalanceStaker: 1_000_000n,
       }),
     );
     expect(plan.step).toBe('settle');
+    expect(plan.amount).toBe(9_000_000n); // periodRewardTotal, not settledCredit (5_000_000n)
+    expect(plan.periodIds).toEqual([3n, 4n]);
   });
 
-  it('12. no unsettled periods, settledOf > 0 -> step "claim"', () => {
+  it('11b. unsettled periods exist but nothing settled YET -> step "settle" still reports the pending reward, not 0 (S-04 audit pass 1, Major #3)', () => {
+    const plan = expectManualAlert(
+      planClaim({
+        kind: 'manual',
+        periodIdsToSettle: [3n, 4n],
+        periodRewardTotal: 9_000_000n,
+        settledCredit: 0n, // nothing settled yet — the bug reported "amount: 0" here
+        creditBalanceStaker: 0n,
+      }),
+    );
+    expect(plan.step).toBe('settle');
+    expect(plan.amount).toBe(9_000_000n);
+    expect(plan.periodIds).toEqual([3n, 4n]);
+  });
+
+  it('12. no unsettled periods, settledOf > 0 -> step "claim", amount = settledOf', () => {
     const plan = expectManualAlert(
       planClaim({
         kind: 'manual',
         periodIdsToSettle: [],
+        periodRewardTotal: 0n,
         settledCredit: 5_000_000n,
         creditBalanceStaker: 0n,
       }),
     );
     expect(plan.step).toBe('claim');
     expect(plan.amount).toBe(5_000_000n);
+    expect(plan.periodIds).toBeUndefined();
   });
 
-  it('13. settledOf 0, CREDIT.balanceOf(staker) > 0 -> step "transfer"', () => {
+  it('13. settledOf 0, CREDIT.balanceOf(staker) > 0 -> step "transfer", amount = CREDIT.balanceOf(staker)', () => {
     const plan = expectManualAlert(
       planClaim({
         kind: 'manual',
         periodIdsToSettle: [],
+        periodRewardTotal: 0n,
         settledCredit: 0n,
         creditBalanceStaker: 7_000_000n,
       }),
     );
     expect(plan.step).toBe('transfer');
     expect(plan.amount).toBe(7_000_000n);
+    expect(plan.periodIds).toBeUndefined();
   });
 
   it('14. everything 0 -> no_op', () => {
@@ -324,6 +394,7 @@ describe('planClaim — manual flow (AC1: staker key absent -> manual alert with
       planClaim({
         kind: 'manual',
         periodIdsToSettle: [],
+        periodRewardTotal: 0n,
         settledCredit: 0n,
         creditBalanceStaker: 0n,
       }),
@@ -568,6 +639,49 @@ describe('discoverPeriodsToSettle — fake client', () => {
     };
     await discoverPeriodsToSettle(client, ADDRESSES, STAKER, { maxPeriodsBack: 5 });
     expect(rewardOfCalls).toEqual([196n, 197n, 198n, 199n, 200n]);
+  });
+
+  it('S-04 audit pass 1, Minor #4: excludes an id whose rewardPeriod().periodEnd has not passed yet, includes one that has', async () => {
+    const now = new Date('2026-09-19T12:00:00.000Z');
+    const nowSec = BigInt(Math.floor(now.getTime() / 1000));
+    const existingIds = [1n, 2n];
+    const periodEndById = new Map<string, bigint>([
+      ['1', nowSec - 1n], // finalized: periodEnd one second before now -> included
+      ['2', nowSec + 1n], // NOT finalized: periodEnd one second after now -> excluded
+    ]);
+    const client: ClaimReadClient = {
+      readContract: vi.fn(async (args: { functionName: string; args: readonly unknown[] }) => {
+        if (args.functionName === 'rewardPeriod') {
+          const id = args.args[0] as bigint;
+          if (!existingIds.includes(id)) throw new Error('revert');
+          return [0n, periodEndById.get(id.toString()) ?? 0n, 0n, 0n, 0n];
+        }
+        if (args.functionName === 'rewardOf') {
+          return 1_000_000n; // both ids have a pending reward — periodEnd is the only filter here
+        }
+        throw new Error(`unexpected ${args.functionName}`);
+      }),
+    };
+    const result = await discoverPeriodsToSettle(client, ADDRESSES, STAKER, { now });
+    expect(result).toEqual([1n]);
+  });
+
+  it('boundary: periodEnd exactly equal to now is NOT yet finalized (strict <, S-04 audit pass 1, Minor #4)', async () => {
+    const now = new Date('2026-09-19T12:00:00.000Z');
+    const nowSec = BigInt(Math.floor(now.getTime() / 1000));
+    const client: ClaimReadClient = {
+      readContract: vi.fn(async (args: { functionName: string; args: readonly unknown[] }) => {
+        if (args.functionName === 'rewardPeriod') {
+          const id = args.args[0] as bigint;
+          if (id !== 1n) throw new Error('revert');
+          return [0n, nowSec, 0n, 0n, 0n]; // periodEnd === now, exactly on the boundary
+        }
+        if (args.functionName === 'rewardOf') return 1_000_000n;
+        throw new Error(`unexpected ${args.functionName}`);
+      }),
+    };
+    const result = await discoverPeriodsToSettle(client, ADDRESSES, STAKER, { now });
+    expect(result).toEqual([]);
   });
 });
 
@@ -848,6 +962,42 @@ describe('executeClaim — fake viem client (AC2: settle -> claim -> activate, i
       }),
     ).rejects.toThrow(/does not support sending transactions/);
   });
+
+  it('S-04 audit pass 1, Blocker #1: a zero-address hot throws InvalidBeneficiaryError before ANY writeContract call', async () => {
+    const { client, writeContract } = fakeExecClient({});
+    let caught: unknown;
+    try {
+      await executeClaim(LIVE_PLAN, {
+        client,
+        account: { address: STAKER } as never,
+        addresses: ADDRESSES,
+        hot: ZERO_ADDRESS,
+        maxFeeGweiCap: 5,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(InvalidBeneficiaryError);
+    expect(writeContract).not.toHaveBeenCalled();
+  });
+
+  it('a malformed (non-address-shaped) hot also throws InvalidBeneficiaryError before any writeContract call', async () => {
+    const { client, writeContract } = fakeExecClient({});
+    let caught: unknown;
+    try {
+      await executeClaim(LIVE_PLAN, {
+        client,
+        account: { address: STAKER } as never,
+        addresses: ADDRESSES,
+        hot: '0xnotanaddress' as Address,
+        maxFeeGweiCap: 5,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(InvalidBeneficiaryError);
+    expect(writeContract).not.toHaveBeenCalled();
+  });
 });
 
 describe('executeActivateFromHot — fake viem client', () => {
@@ -894,5 +1044,97 @@ describe('executeActivateFromHot — fake viem client', () => {
       ),
     ).rejects.toThrow(/dryRun/);
     expect(writeContract).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveCliArgs — CLI argument/env resolution (S-04 audit pass 1, Blocker #1, fix item 1)', () => {
+  it('STAKER_PRIVATE_KEY set, TREASURER_PRIVATE_KEY unset -> refuse, even without --live (never default hot to zero)', () => {
+    const result = resolveCliArgs({
+      env: { TREASURER_LIVE: false, STAKER_PRIVATE_KEY: `0x${'ab'.repeat(32)}` },
+      argv: [],
+    });
+    expect(result.outcome).toBe('refuse');
+    if (result.outcome === 'refuse') {
+      expect(result.reason).toMatch(/TREASURER_PRIVATE_KEY/);
+    }
+  });
+
+  it('STAKER_PRIVATE_KEY set, TREASURER_PRIVATE_KEY unset -> still refuses with --live and TREASURER_LIVE=true', () => {
+    const result = resolveCliArgs({
+      env: {
+        TREASURER_LIVE: true,
+        STAKER_PRIVATE_KEY: `0x${'ab'.repeat(32)}`,
+      },
+      argv: ['--live'],
+    });
+    expect(result.outcome).toBe('refuse');
+  });
+
+  it('both keys set, --live + TREASURER_LIVE=true -> runs, wantsLiveSend true', () => {
+    const result = resolveCliArgs({
+      env: {
+        TREASURER_LIVE: true,
+        STAKER_PRIVATE_KEY: `0x${'ab'.repeat(32)}`,
+        TREASURER_PRIVATE_KEY: `0x${'cd'.repeat(32)}`,
+      },
+      argv: ['--live'],
+    });
+    expect(result).toEqual({
+      outcome: 'run',
+      live: true,
+      treasurerLiveEnv: true,
+      hasStakerKey: true,
+      hasHotKey: true,
+      wantsLiveSend: true,
+    });
+  });
+
+  it('only TREASURER_PRIVATE_KEY set (hot_activate-only flow) -> runs fine, no staker key needed', () => {
+    const result = resolveCliArgs({
+      env: { TREASURER_LIVE: false, TREASURER_PRIVATE_KEY: `0x${'cd'.repeat(32)}` },
+      argv: [],
+    });
+    expect(result).toEqual({
+      outcome: 'run',
+      live: false,
+      treasurerLiveEnv: false,
+      hasStakerKey: false,
+      hasHotKey: true,
+      wantsLiveSend: false,
+    });
+  });
+
+  it('neither key set, --live + TREASURER_LIVE=true -> refuse (pre-existing gate, preserved)', () => {
+    const result = resolveCliArgs({ env: { TREASURER_LIVE: true }, argv: ['--live'] });
+    expect(result.outcome).toBe('refuse');
+    if (result.outcome === 'refuse') {
+      expect(result.reason).toMatch(/STAKER_PRIVATE_KEY or TREASURER_PRIVATE_KEY/);
+    }
+  });
+
+  it('neither key set, no --live -> runs (a plain dry-run/manual-alert-only read is always allowed)', () => {
+    const result = resolveCliArgs({ env: { TREASURER_LIVE: false }, argv: [] });
+    expect(result).toEqual({
+      outcome: 'run',
+      live: false,
+      treasurerLiveEnv: false,
+      hasStakerKey: false,
+      hasHotKey: false,
+      wantsLiveSend: false,
+    });
+  });
+
+  it('--live passed but TREASURER_LIVE=false -> runs, wantsLiveSend false (dry-run plan only)', () => {
+    const result = resolveCliArgs({
+      env: {
+        TREASURER_LIVE: false,
+        TREASURER_PRIVATE_KEY: `0x${'cd'.repeat(32)}`,
+      },
+      argv: ['--live'],
+    });
+    expect(result.outcome).toBe('run');
+    if (result.outcome === 'run') {
+      expect(result.wantsLiveSend).toBe(false);
+    }
   });
 });
