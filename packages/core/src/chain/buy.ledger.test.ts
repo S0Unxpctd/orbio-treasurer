@@ -49,11 +49,18 @@ const QUOTE = {
   reason: 0,
 };
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function fakeClient(opts: {
   usdgBalance?: bigint;
   ethBalance?: bigint;
   allowance?: bigint;
   quote?: typeof QUOTE;
+  /** Artificial delay (ms) before a receipt resolves — used to give a concurrent call a real
+   *  window to (wrongly, pre-fix) race this one. */
+  receiptDelayMs?: number;
 }): {
   client: BuyExecClient;
   writeContract: ReturnType<typeof vi.fn>;
@@ -72,6 +79,7 @@ function fakeClient(opts: {
     throw new Error(`fakeClient: unexpected writeContract ${args.functionName}`);
   });
   const waitForTransactionReceipt = vi.fn(async ({ hash }: { hash: Hex }) => {
+    if (opts.receiptDelayMs) await sleep(opts.receiptDelayMs);
     if (hash === APPROVE_HASH) {
       return { status: 'success', logs: [] } as unknown as TransactionReceipt;
     }
@@ -283,6 +291,60 @@ describe('buyCredit — ledger rows (S-05 AC3, AC4)', () => {
 
     const events = await store.listTreasuryEvents(agentId, 10);
     expect(events).toHaveLength(2); // the refusal row + the dry_run row — both kept
+  });
+
+  it('two concurrent buyCredit() calls (different idempotencyKeys, BUY_MAX_PER_DAY=1) with an artificial receipt delay → exactly one writeContract("buyAndActivate") call and one buy row (S-05 audit fix: check-then-act race)', async () => {
+    const agentId = await seedAgent();
+    // A slow fake client: waitForTransactionReceipt() takes 30ms, so if the two calls' critical
+    // sections (idempotency + day-cap check + writes) were NOT serialized by withAgentLock, the
+    // second call would read the pre-buy state (buysToday === 0) while the first is still
+    // in-flight and would ALSO pass the day cap — exactly the audit's Major finding.
+    const { client, writeContract } = fakeClient({ receiptDelayMs: 30 });
+    const caps = liveCaps({ buyMaxPerDay: 1 });
+
+    const [first, second] = await Promise.all([
+      buyCredit({
+        store,
+        agentId,
+        client,
+        addresses: ADDRESSES,
+        hot: HOT,
+        account: { address: HOT } as never,
+        usdgIn: 10_000_000n,
+        caps,
+        idempotencyKey: 'race-key-1',
+      }),
+      buyCredit({
+        store,
+        agentId,
+        client,
+        addresses: ADDRESSES,
+        hot: HOT,
+        account: { address: HOT } as never,
+        usdgIn: 10_000_000n,
+        caps,
+        idempotencyKey: 'race-key-2',
+      }),
+    ]);
+
+    const results = [first, second];
+    const executed = results.filter((r) => r.status === 'executed');
+    const refused = results.filter((r) => r.status === 'refused');
+    expect(executed).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    if (refused[0]?.status === 'refused') {
+      expect(refused[0].reason).toBe('per_day_cap_exceeded');
+    }
+
+    const buyAndActivateCalls = writeContract.mock.calls.filter(
+      (c) => c[0]?.functionName === 'buyAndActivate',
+    );
+    expect(buyAndActivateCalls).toHaveLength(1); // never two on-chain sends for one BUY_MAX_PER_DAY=1
+
+    const events = await store.listTreasuryEvents(agentId, 10);
+    expect(events.filter((e) => e.kind === 'buy')).toHaveLength(1);
+    expect(events.filter((e) => e.kind === 'activate')).toHaveLength(1);
+    expect(events.filter((e) => e.kind === 'dry_run')).toHaveLength(1); // the day-cap refusal row
   });
 
   it("MAX_FEE_GWEI default is used when buyCredit()'s deps omit it", async () => {

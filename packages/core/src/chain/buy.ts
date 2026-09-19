@@ -84,9 +84,17 @@ const DEFAULT_BUY_MAX_USDG_PER_TX_ATOMS = parseDecimal(BUY_MAX_USDG_PER_TX);
  * Resolves the four `BuyCaps` from env, per CLAUDE.md rule 5: `BUY_MAX_USDG_PER_TX` and
  * `BUY_MAX_PER_DAY` may only be LOWERED by their same-named env var — a value that would raise
  * either is ignored and logged (never thrown; a bad env value must not crash the tick), and a
- * value that fails to parse is treated the same way. `MIN_GAS_ETH` has a plain override (no
- * directionality restriction — see env.ts's comment on why). `MIN_DISCOUNT_RATIO`/`maxFills`
- * have no env input at all; they're always the PRD-fixed defaults.
+ * value that fails to parse is treated the same way.
+ *
+ * `MIN_GAS_ETH` (audit pass 1, Minor/Question 2 — closed): directionality-restricted the OTHER
+ * way around from the two caps above, because it's a *minimum required balance*, not a ceiling
+ * on exposure — the safer direction for a floor is UP (refuse more often, never send with too
+ * little gas budgeted), never down. Env may only RAISE it above `DEFAULT_MIN_GAS_ETH`; a value
+ * that would LOWER it is ignored and logged, exactly mirroring the two caps' own downward-only
+ * rule but mirrored to match what "safer" means for a floor instead of a ceiling. `MAX_FEE_GWEI`
+ * gets the matching ceiling-shaped restriction in `resolveMaxFeeGweiCap()` below.
+ * `MIN_DISCOUNT_RATIO`/`maxFills` have no env input at all; they're always the PRD-fixed
+ * defaults.
  */
 export function resolveBuyCaps(options: ResolveBuyCapsOptions): BuyCaps {
   const { env } = options;
@@ -130,15 +138,27 @@ export function resolveBuyCaps(options: ResolveBuyCapsOptions): BuyCaps {
     }
   }
 
-  const minGasEth = env.MIN_GAS_ETH ?? DEFAULT_MIN_GAS_ETH;
-  let minGasWei: bigint;
-  try {
-    minGasWei = parseEther(minGasEth);
-  } catch {
-    warn(
-      `MIN_GAS_ETH="${minGasEth}" is not a valid decimal — falling back to ${DEFAULT_MIN_GAS_ETH}`,
-    );
-    minGasWei = parseEther(DEFAULT_MIN_GAS_ETH);
+  const defaultMinGasWei = parseEther(DEFAULT_MIN_GAS_ETH);
+  let minGasWei = defaultMinGasWei;
+  if (env.MIN_GAS_ETH !== undefined) {
+    let envMinGasWei: bigint | undefined;
+    try {
+      envMinGasWei = parseEther(env.MIN_GAS_ETH);
+    } catch {
+      warn(
+        `MIN_GAS_ETH="${env.MIN_GAS_ETH}" is not a valid decimal — ignoring, keeping default ${DEFAULT_MIN_GAS_ETH}`,
+      );
+    }
+    if (envMinGasWei !== undefined) {
+      if (envMinGasWei > defaultMinGasWei) {
+        minGasWei = envMinGasWei;
+      } else if (envMinGasWei < defaultMinGasWei) {
+        warn(
+          `MIN_GAS_ETH="${env.MIN_GAS_ETH}" would LOWER the default gas-safety floor (${DEFAULT_MIN_GAS_ETH}) — ignored (a minimum balance may only be raised via env, never lowered).`,
+        );
+      }
+      // Equal to the default: no-op, no warning either way.
+    }
   }
 
   return {
@@ -152,7 +172,11 @@ export function resolveBuyCaps(options: ResolveBuyCapsOptions): BuyCaps {
 }
 
 /** `executeBuy()`'s `maxFeePerGas` cap (gwei), from env `MAX_FEE_GWEI` or `DEFAULT_MAX_FEE_GWEI`.
- *  Not directionality-restricted (unlike `resolveBuyCaps()`'s two caps) — see env.ts's comment. */
+ *  Audit pass 1, Minor/Question 2 (closed): directionality-restricted like
+ *  `resolveBuyCaps()`'s two exposure caps — this IS a ceiling (a maximum), so the safer
+ *  direction is DOWN. Env may only LOWER it below `DEFAULT_MAX_FEE_GWEI`; a value that would
+ *  raise it is ignored and logged, never thrown (a bad env value must not crash the tick). See
+ *  `resolveBuyCaps()`'s comment on `MIN_GAS_ETH` for the mirror-image floor case. */
 export function resolveMaxFeeGweiCap(
   env: Pick<Env, 'MAX_FEE_GWEI'>,
   warn: (message: string) => void = (message) => console.error(message),
@@ -162,6 +186,12 @@ export function resolveMaxFeeGweiCap(
   if (!Number.isFinite(parsed) || parsed <= 0) {
     warn(
       `MAX_FEE_GWEI="${env.MAX_FEE_GWEI}" is not a valid positive number — ignoring, keeping default ${DEFAULT_MAX_FEE_GWEI}`,
+    );
+    return DEFAULT_MAX_FEE_GWEI;
+  }
+  if (parsed > DEFAULT_MAX_FEE_GWEI) {
+    warn(
+      `MAX_FEE_GWEI="${env.MAX_FEE_GWEI}" would RAISE the default fee cap (${DEFAULT_MAX_FEE_GWEI}) — ignored (a maximum-fee cap may only be lowered via env, never raised).`,
     );
     return DEFAULT_MAX_FEE_GWEI;
   }
@@ -555,8 +585,25 @@ function serializePlan(plan: BuyPlan): Record<string, unknown> {
  * a refusal or dry run — two (`buy` + `activate`, sharing `tx_hash`) for an executed buy — unless
  * `idempotencyKey` already has a `buy` event on file, in which case this makes no ledger writes
  * and no chain calls at all.
+ *
+ * Audit fix (S-05 audit pass 1, Major): the idempotency lookup, `planBuy()`'s day-cap check, the
+ * ledger writes AND the on-chain send (for a live buy) all run inside one
+ * `store.withAgentLock(agentId, ...)` call (`LedgerStore.withAgentLock`, ledger/types.ts) —
+ * the whole thing is now check-AND-act, not check-then-act. Two concurrent `buyCredit()` calls
+ * for the SAME agent (same or different `idempotencyKey`) can never both read the pre-buy state
+ * and both pass `planBuy()`'s cap check: the second call's lock body starts only after the
+ * first's has fully settled (ledger rows written, on-chain send done or refused), by which point
+ * its own idempotency/day-cap reads see the first call's effects. Held duration is irrelevant
+ * per the ticket ("1 buy/day cap makes the held duration irrelevant") — `BUY_MAX_PER_DAY` is 1 by
+ * default, so a second call for the same agent is expected to be rare, not hot-path-latency-
+ * sensitive. Calls for DIFFERENT agents never wait on each other (see `withAgentLock`'s own
+ * per-dialect guarantee).
  */
 export async function buyCredit(deps: BuyCreditDeps): Promise<BuyCreditResult> {
+  return deps.store.withAgentLock(deps.agentId, () => buyCreditLocked(deps));
+}
+
+async function buyCreditLocked(deps: BuyCreditDeps): Promise<BuyCreditResult> {
   const now = deps.now?.() ?? new Date();
   const lookback = deps.eventLookback ?? DEFAULT_EVENT_LOOKBACK;
 
