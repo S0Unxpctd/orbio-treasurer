@@ -1,4 +1,5 @@
-/** chain/ — S-03/S-05 barrel. See tasks/S-03.md, tasks/S-05.md and docs/PRD-1.0-sprint.md §3-6. */
+/** chain/ — S-03/S-04/S-05 barrel. See tasks/S-03.md, tasks/S-04.md, tasks/S-05.md and
+ *  docs/PRD-1.0-sprint.md §3-6. */
 
 export type {
   BuyCaps,
@@ -36,6 +37,47 @@ export {
   ROBINHOOD_CHAIN_ID,
   robinhoodChain,
 } from './chain.js';
+export type {
+  ClaimAndActivateDeps,
+  ClaimAndActivateResult,
+  ClaimCaps,
+  ClaimExecClient,
+  ClaimExecuteDeps,
+  ClaimExecutionResult,
+  ClaimHistoryInput,
+  ClaimLegResult,
+  ClaimPlan,
+  ClaimReadClient,
+  ClaimRefusal,
+  ClaimRefusalReason,
+  ClaimStep,
+  ClaimStepResult,
+  DiscoverLatestPeriodIdOptions,
+  DiscoverPeriodsToSettleOptions,
+  ExecuteActivateFromHotDeps,
+  HotActivatePlan,
+  ManualAlertPlan,
+  ManualAlertStep,
+  NoOpClaimPlan,
+  PlanClaimInput,
+  ResolveClaimCapsOptions,
+  SettleClaimActivatePlan,
+} from './claim.js';
+export {
+  ClaimExecutionError,
+  claimAndActivate,
+  DEFAULT_MAX_FEE_GWEI as CLAIM_DEFAULT_MAX_FEE_GWEI,
+  DEFAULT_MIN_GAS_ETH as CLAIM_DEFAULT_MIN_GAS_ETH,
+  DEFAULT_STAKER_MIN_GAS_ETH,
+  DISCOVERY_MAX_PERIODS_BACK,
+  discoverLatestPeriodId,
+  discoverPeriodsToSettle,
+  executeActivateFromHot,
+  executeClaim,
+  planClaim,
+  resolveClaimCaps,
+  resolveMaxFeeGweiCap as resolveClaimMaxFeeGweiCap,
+} from './claim.js';
 export type { ChainAddresses } from './contracts.js';
 export {
   ChainEnvValidationError,
@@ -62,3 +104,11 @@ export {
 } from './read.js';
 export type { SnapshotTreasuryParams, SnapshotTreasuryResult } from './snapshot.js';
 export { snapshotTreasury } from './snapshot.js';
+export {
+  addressToBytes32,
+  capRemaining,
+  decodeEventFromContract,
+  requireSuccessReceipt,
+  sumAtomsForUtcDay,
+  utcDateKey,
+} from './tx.js';

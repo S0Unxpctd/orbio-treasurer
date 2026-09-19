@@ -106,8 +106,38 @@ const baseSchema = z.object({
   // `resolveMaxFeeGweiCap()`/`resolveBuyCaps()`. Defaults live in chain/buy.ts
   // (`DEFAULT_MAX_FEE_GWEI`, `DEFAULT_MIN_GAS_ETH`), not here, to match `RH_RPC_URLS`'s pattern
   // above.
+  //
+  // S-04's `chain/claim.ts` reuses these same two names/shapes for its own hot-wallet
+  // `activate()` gas gate and shared `maxFeePerGas` cap — same meaning for any Treasurer tx —
+  // rather than declaring a second copy here (merge note, S-04 ∥ S-05).
   MAX_FEE_GWEI: optionalString,
   MIN_GAS_ETH: optionalString,
+
+  // --- S-04: settle -> claim -> activate gates (docs/PRD-1.0-sprint.md §3, §4 T-4, §6;
+  // tasks/S-04.md "In scope") ---
+  // `ACTIVATE_MAX_PER_DAY` may only LOWER `policy/defaults.ts`'s constant of the same name —
+  // `chain/claim.ts`'s `resolveClaimCaps()` enforces that and warns (never throws) on a value
+  // that would raise it (CLAUDE.md rule 5). Decimal string (CREDIT units, 6 dp), parsed with
+  // `ledger/decimal.ts`'s exact bigint arithmetic — same pattern as S-05's `BUY_MAX_USDG_PER_TX`.
+  ACTIVATE_MAX_PER_DAY: optionalString,
+  // Plain override (operational tuning, not an exposure cap — not directionality-restricted).
+  // `MIN_GAS_ETH` (declared above, shared with S-05) gates the HOT wallet's own `activate()`
+  // send (the "only STAKER_ADDRESS is set" manual-fallback flow's hot-activate leg);
+  // `STAKER_MIN_GAS_ETH` gates the STAKER wallet's settle/claim/activate sends — two different
+  // wallets, so two different floors.
+  STAKER_MIN_GAS_ETH: optionalString,
+  // Period-discovery fallback (tasks/S-04.md "In scope"): a manual, always-wins comma list of
+  // `Staking.settle()` period ids, for when the operator wants to settle specific periods
+  // without running `discoverLatestPeriodId()`/`discoverPeriodsToSettle()` at all. Also doubles
+  // as the ticket's required fallback if period discovery had failed within its 45-min
+  // time-box (it didn't — see docs/api-notes.md "S-04 period discovery" — but the override
+  // stays available either way, per the ticket's "instead expose settle(periodIds) with ids
+  // supplied by env").
+  STAKING_SETTLE_PERIODS: optionalString,
+  // Optional starting point for `discoverLatestPeriodId()`'s exponential search (a period id
+  // the operator already knows exists, e.g. from a previous run's printed output) — skips
+  // re-walking from id 1 every time. Purely a speed hint; discovery is correct without it.
+  STAKING_LAST_PERIOD_HINT: optionalString,
 
   // --- S-01: gateway + router (docs/PRD-1.0-sprint.md §4 T-1) ---
   // Comma-separated `otk_<32 hex>` values, hashed with sha256 at boot (router/keys.ts). Optional

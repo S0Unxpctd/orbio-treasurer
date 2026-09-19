@@ -61,3 +61,20 @@ export const MIN_DISCOUNT_RATIO = 1.1;
 /** S-05 "In scope": the slippage guard behind `minCreditOut = floor(quote.creditOut × 0.98)` —
  *  200 bps is exactly that 2% haircut (10000 − 200 = 9800 ⇒ × 0.98). */
 export const SLIPPAGE_BPS = 200;
+
+// --- S-04: settle -> claim -> activate gates (docs/PRD-1.0-sprint.md §3, §4 T-4, §6;
+// tasks/S-04.md "In scope") --
+//
+// A bare constant, not a function or part of `DEFAULT_POLICY` above, per CLAUDE.md rule 3:
+// `policy/**` stays pure — the env-override arithmetic and all I/O around this live in
+// `chain/claim.ts` (`resolveClaimCaps()`), which imports this as its default. This is a true
+// exposure cap (a *smaller* number is always the safer direction, CLAUDE.md rule 5) — the only
+// one S-04 has — so it's the only one `resolveClaimCaps()` restricts to downward-only env
+// overrides, exactly like S-05's `BUY_MAX_USDG_PER_TX`/`BUY_MAX_PER_DAY` restrict theirs.
+
+/** PRD §4 T-4 / §6: max CREDIT activated (minted onto the Orbio API balance) per UTC calendar
+ *  day, across whichever activate leg ran (the staker-key auto flow's `activate()`, or the
+ *  manual-fallback's hot-wallet `activate()`) — one shared daily budget, not per-leg. Decimal
+ *  string, CREDIT units (6 dp) — `"50"` → `50_000_000n` atoms via `ledger/decimal.ts`'s
+ *  `parseDecimal`, matching PRD §4 T-4's literal "default 50 CREDIT = 50e6 atoms". */
+export const ACTIVATE_MAX_PER_DAY = '50';

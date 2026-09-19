@@ -19,7 +19,8 @@
     "tick": "pnpm --filter @orbio-treasurer/book-daily tick",
     "probe": "tsx scripts/probe.ts",
     "treasury:read": "pnpm --filter @orbio-treasurer/core treasury:read",
-    "treasury:buy": "pnpm --filter @orbio-treasurer/core treasury:buy"
+    "treasury:buy": "pnpm --filter @orbio-treasurer/core treasury:buy",
+    "treasury:claim": "pnpm --filter @orbio-treasurer/core treasury:claim"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
