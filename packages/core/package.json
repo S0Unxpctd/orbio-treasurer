@@ -24,6 +24,7 @@
   "dependencies": {
     "better-sqlite3": "^13.0.3",
     "postgres": "^3.4.9",
+    "viem": "^2.56.8",
     "zod": "^4.1.13"
   },
   "devDependencies": {
