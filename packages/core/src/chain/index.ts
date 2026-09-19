@@ -96,7 +96,12 @@ export {
   parseOrbioBalanceHeader,
   readApiBalance,
 } from './key.js';
-export type { ChainSnapshot, QuoteResult, ReadTreasuryOptions } from './read.js';
+export type {
+  ChainSnapshot,
+  QuoteResult,
+  ReadTreasuryOptions,
+  TreasuryReadClient,
+} from './read.js';
 export {
   QUOTE_PROBE_MAX_FILLS,
   QUOTE_PROBE_USDG_IN,

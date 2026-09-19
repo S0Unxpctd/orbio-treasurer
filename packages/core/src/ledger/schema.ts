@@ -340,8 +340,10 @@ export const LEDGER_SCHEMA: readonly TableDef[] = [
       timestamp('at', { notNull: true }),
       text('kind', {
         notNull: true,
+        // 'tick' added by S-06 (migration 006, both dialects) — tick/tick.ts's own idempotency
+        // marker row, one per 15-min UTC bucket per agent.
         check:
-          "kind in ('settle','claim','activate','buy','stake','mode_change','alert','dry_run')",
+          "kind in ('settle','claim','activate','buy','stake','mode_change','alert','dry_run','tick')",
       }),
       tokenAmount('amount'),
       text('token', { check: "token in ('CREDIT','ORBIO','USDG','ETH')" }),

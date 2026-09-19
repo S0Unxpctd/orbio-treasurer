@@ -2,6 +2,10 @@
  * Integration test for `POST /v1/chat/completions` (S-01 AC2, AC3, AC4, AC6), against the
  * in-process fake upstream in `apps/web/test/fake-upstream.ts` — never the real Orbio gateway.
  */
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { InMemoryCallRecorder } from '@orbio-treasurer/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,7 +16,12 @@ import {
   startFakeUpstream,
   waitFor,
 } from '../../../../test/fake-upstream.js';
-import { resetCatalogCacheForTesting, setRecorderForTesting } from '../../_gateway.js';
+import { resetLedgerStoreForTesting } from '../../../_ledger.js';
+import {
+  resetCatalogCacheForTesting,
+  resetModeCacheForTesting,
+  setRecorderForTesting,
+} from '../../_gateway.js';
 import { POST } from './route.js';
 
 const VALID_KEY = `otk_${'a'.repeat(32)}`;
@@ -24,11 +33,21 @@ const ENV_KEYS = [
   'GATEWAY_KEYS',
   'ROUTER_ALLOW',
   'TREASURER_MODE',
+  'LEDGER',
+  'LEDGER_SQLITE_PATH',
 ] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 let upstream: FakeUpstream;
 let recorder: InMemoryCallRecorder;
+// S-06: `resolveCaller()`/`getRecorder()`/`getMode()` (../../_gateway.js) now always try the
+// ledger first (LEDGER defaults to 'sqlite', CLAUDE.md #5c) — without an isolated per-test path,
+// every request in this suite would open/create the SAME real `./treasurer.db` file relative to
+// wherever vitest's cwd happens to be. `setRecorderForTesting()` bypasses the ledger for the
+// RECORDER (checked first in `getRecorder()`), but `resolveCaller()`/`getMode()` have no such
+// override — they always at least attempt `getLedgerStore(env)` — so a real, isolated temp
+// sqlite path is still required, same pattern as `apps/web/app/api/agents/route.test.ts` (S-08).
+let dir: string;
 
 async function setUpstream(mode: Parameters<typeof startFakeUpstream>[0] = 'ok') {
   upstream = await startFakeUpstream(mode);
@@ -41,6 +60,11 @@ beforeEach(async () => {
   process.env.GATEWAY_KEYS = VALID_KEY;
   delete process.env.ROUTER_ALLOW;
   process.env.TREASURER_MODE = 'normal';
+  dir = mkdtempSync(join(tmpdir(), 's06-gateway-'));
+  process.env.LEDGER = 'sqlite';
+  process.env.LEDGER_SQLITE_PATH = join(dir, 'treasurer.db');
+  resetLedgerStoreForTesting();
+  resetModeCacheForTesting();
   resetCatalogCacheForTesting();
   recorder = new InMemoryCallRecorder();
   setRecorderForTesting(recorder);
@@ -53,8 +77,11 @@ afterEach(async () => {
     else process.env[key] = savedEnv[key];
   }
   setRecorderForTesting(null);
+  resetLedgerStoreForTesting();
+  resetModeCacheForTesting();
   resetCatalogCacheForTesting();
   await upstream.close();
+  rmSync(dir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 

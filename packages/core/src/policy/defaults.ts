@@ -78,3 +78,32 @@ export const SLIPPAGE_BPS = 200;
  *  string, CREDIT units (6 dp) — `"50"` → `50_000_000n` atoms via `ledger/decimal.ts`'s
  *  `parseDecimal`, matching PRD §4 T-4's literal "default 50 CREDIT = 50e6 atoms". */
 export const ACTIVATE_MAX_PER_DAY = '50';
+
+// --- S-06: tick + policy engine gates (docs/PRD-1.0-sprint.md §1, §4 T-6, §6; tasks/S-06.md
+// "In scope") --
+//
+// Bare constants, not part of `DEFAULT_POLICY` (T-015's older, superseded engine — kept
+// untouched, never called, per this ticket) or a function, same reason as the S-04/S-05 blocks
+// above: `policy/**` stays pure (CLAUDE.md rule 3). `sprint.ts`'s `decide()` takes these — plus
+// `BUY_MAX_USDG_PER_TX` above, reused unchanged rather than duplicated — as its `config`.
+
+/** PRD §4 T-6: a `stakeup` action fires every this-many gateway calls since the last one. */
+export const STAKEUP_EVERY_CALLS = 1000;
+
+/** PRD §4 T-6: the fixed USDG amount a `stakeup` action signals. This ticket's executor only
+ *  ever turns it into an `alert` event with a deep link (S-07 executes it live for real). */
+export const STAKEUP_USDG = '1';
+
+/** PRD §4 T-6: runway ≥ this many days -> mode 'normal' (below it -> 'eco', unless below
+ *  `RUNWAY_CRITICAL_DAYS` too, in which case 'critical' wins). Decimal string, day units — same
+ *  `Money`-typed convention T-015's `PolicyConfig.comfortableDays`/`tightDays` already use for a
+ *  day count, even though this isn't itself a dollar amount. */
+export const RUNWAY_ECO_DAYS = '2';
+
+/** PRD §4 T-6: runway < this many days -> mode 'critical'. */
+export const RUNWAY_CRITICAL_DAYS = '0.5';
+
+/** PRD §4 T-6: a `buy` action fires when runway is below this many days; also the deficit
+ *  formula's target runway (`RUNWAY_BUY_DAYS × burnDaily − available`) — one number, two uses,
+ *  by design (the buy is sized to restore exactly this much runway). */
+export const RUNWAY_BUY_DAYS = '1';

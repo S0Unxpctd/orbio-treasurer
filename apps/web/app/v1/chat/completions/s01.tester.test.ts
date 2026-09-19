@@ -16,6 +16,10 @@
  *   non-stream usage: prompt_tokens=12, completion_tokens=34, cost=0.001234
  *   stream usage:     prompt_tokens=12, completion_tokens=8,  cost=0.000567
  */
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { InMemoryCallRecorder } from '@orbio-treasurer/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -25,7 +29,12 @@ import {
   startFakeUpstream,
   waitFor,
 } from '../../../../test/fake-upstream.js';
-import { resetCatalogCacheForTesting, setRecorderForTesting } from '../../_gateway.js';
+import { resetLedgerStoreForTesting } from '../../../_ledger.js';
+import {
+  resetCatalogCacheForTesting,
+  resetModeCacheForTesting,
+  setRecorderForTesting,
+} from '../../_gateway.js';
 import { GET as getModels } from '../../models/route.js';
 import { POST } from './route.js';
 
@@ -41,11 +50,17 @@ const ENV_KEYS = [
   'GATEWAY_KEYS',
   'ROUTER_ALLOW',
   'TREASURER_MODE',
+  'LEDGER',
+  'LEDGER_SQLITE_PATH',
 ] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 let upstream: FakeUpstream;
 let recorder: InMemoryCallRecorder;
+// S-06: see route.test.ts's own comment on the same isolation — `resolveCaller()`/`getMode()`
+// (../../_gateway.js) always at least attempt the ledger, so a real, isolated temp sqlite path
+// is required even though `setRecorderForTesting()` bypasses it for the recorder.
+let dir: string;
 
 async function setUpstream(mode: Parameters<typeof startFakeUpstream>[0] = 'ok') {
   upstream = await startFakeUpstream(mode);
@@ -58,6 +73,11 @@ beforeEach(async () => {
   process.env.GATEWAY_KEYS = TESTER_VALID_KEY;
   delete process.env.ROUTER_ALLOW;
   process.env.TREASURER_MODE = 'normal';
+  dir = mkdtempSync(join(tmpdir(), 's06-gateway-tester-'));
+  process.env.LEDGER = 'sqlite';
+  process.env.LEDGER_SQLITE_PATH = join(dir, 'treasurer.db');
+  resetLedgerStoreForTesting();
+  resetModeCacheForTesting();
   resetCatalogCacheForTesting();
   recorder = new InMemoryCallRecorder();
   setRecorderForTesting(recorder);
@@ -70,8 +90,11 @@ afterEach(async () => {
     else process.env[key] = savedEnv[key];
   }
   setRecorderForTesting(null);
+  resetLedgerStoreForTesting();
+  resetModeCacheForTesting();
   resetCatalogCacheForTesting();
   await upstream.close();
+  rmSync(dir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
 

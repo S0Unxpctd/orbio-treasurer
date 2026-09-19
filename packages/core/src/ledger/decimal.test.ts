@@ -8,6 +8,7 @@ import {
   divideDecimal,
   formatDecimal,
   maxDecimal,
+  multiplyDecimal,
   normalizeMoney,
   normalizeTokenAmount,
   parseDecimal,
@@ -103,5 +104,35 @@ describe('divideDecimal', () => {
 
   it('throws on division by zero rather than returning Infinity', () => {
     expect(() => divideDecimal(parseDecimal('1'), parseDecimal('0'))).toThrow(/division by zero/);
+  });
+});
+
+describe('multiplyDecimal (S-06)', () => {
+  it('multiplies exactly when it multiplies evenly', () => {
+    expect(formatDecimal(multiplyDecimal(parseDecimal('2'), parseDecimal('3')))).toBe('6.000000');
+  });
+
+  it("handles a fractional operand (day-count × daily-rate, sprint.ts's own use)", () => {
+    expect(formatDecimal(multiplyDecimal(parseDecimal('1'), parseDecimal('0.5')))).toBe('0.500000');
+    expect(formatDecimal(multiplyDecimal(parseDecimal('0.5'), parseDecimal('0.5')))).toBe(
+      '0.250000',
+    );
+  });
+
+  it('rounds half away from zero at the 6th decimal place of the rescaled product', () => {
+    // 0.000003 × 0.5 = 0.0000015 -> rescaled remainder is exactly half -> rounds up to 0.000002
+    expect(formatDecimal(multiplyDecimal(parseDecimal('0.000003'), parseDecimal('0.5')))).toBe(
+      '0.000002',
+    );
+  });
+
+  it('handles a negative operand, sign of the result follows normal multiplication', () => {
+    expect(formatDecimal(multiplyDecimal(parseDecimal('-2'), parseDecimal('3')))).toBe('-6.000000');
+    expect(formatDecimal(multiplyDecimal(parseDecimal('2'), parseDecimal('-3')))).toBe('-6.000000');
+    expect(formatDecimal(multiplyDecimal(parseDecimal('-2'), parseDecimal('-3')))).toBe('6.000000');
+  });
+
+  it('multiplying by zero is zero, never "-0"', () => {
+    expect(formatDecimal(multiplyDecimal(parseDecimal('-2'), parseDecimal('0')))).toBe('0.000000');
   });
 });

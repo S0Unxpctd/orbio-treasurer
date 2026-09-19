@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS treasury_events (
   id TEXT PRIMARY KEY NOT NULL,
   agent_id TEXT NOT NULL REFERENCES agents(id),
   at TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind in ('settle','claim','activate','buy','stake','mode_change','alert','dry_run')),
+  kind TEXT NOT NULL CHECK (kind in ('settle','claim','activate','buy','stake','mode_change','alert','dry_run','tick')),
   amount TEXT,
   token TEXT CHECK (token in ('CREDIT','ORBIO','USDG','ETH')),
   usd_value TEXT,

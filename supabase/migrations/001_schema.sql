@@ -152,7 +152,7 @@ create table if not exists treasury_events (
   id uuid primary key default gen_random_uuid(),
   agent_id uuid not null references agents(id),
   at timestamptz not null,
-  kind text not null check (kind in ('settle','claim','activate','buy','stake','mode_change','alert','dry_run')),
+  kind text not null check (kind in ('settle','claim','activate','buy','stake','mode_change','alert','dry_run','tick')),
   amount numeric(30,0),
   token text check (token in ('CREDIT','ORBIO','USDG','ETH')),
   usd_value numeric(18,6),
