@@ -8,10 +8,16 @@
  *
  * Multicall: tries `client.multicall()` first (Multicall3 is deployed on 4663, confirmed live —
  * see chain.ts). `allowFailure: true` means a reverting `getQuote` degrades to a `null` quote
- * (AC3) without failing the other 9 reads. Only if the multicall call itself throws (a
- * genuinely unavailable/broken multicall, not a single reverting leg) does this fall back to 9
- * sequential `Promise.allSettled` reads through the same fallback client — ticket: "Uses
- * multicall if available on 4663, else sequential with the fallback client".
+ * (AC3) without failing the other 9 reads. viem's `multicall({allowFailure: true})` never
+ * throws for a failing/reverting/unavailable aggregate3 call — it converts that into a
+ * `{status:'failure'}` entry for every leg instead (confirmed against viem@2.56.8's source;
+ * see tasks/S-03.md Test report's "Discovered"). So a genuinely down Multicall3 is detected as
+ * *every* leg coming back `'failure'`, not as a thrown error — that (or the multicall call
+ * itself throwing, kept as a belt-and-suspenders case for other transports/viem versions) is
+ * what falls back to 9 sequential `Promise.allSettled` `readContract` reads through the same
+ * fallback client — ticket: "Uses multicall if available on 4663, else sequential with the
+ * fallback client". A partial failure (some legs ok, some not) is not treated as "multicall
+ * down" and keeps the current per-leg behaviour (quote → null, required legs → typed error).
  */
 import type { Address, PublicClient } from 'viem';
 import type { ChainAddresses } from './contracts.js';
@@ -72,6 +78,38 @@ export interface ReadTreasuryOptions {
 
 const ZERO_ADDRESS: Address = '0x0000000000000000000000000000000000000000';
 
+/** The 9 non-ETH reads, run one `readContract` call at a time instead of batched through
+ *  Multicall3 — the degraded path used when multicall itself is unavailable (see this file's
+ *  header comment). */
+async function sequentialReadContracts(
+  client: PublicClient,
+  contracts: readonly {
+    readonly address: Address;
+    readonly abi: unknown;
+    readonly functionName: string;
+    readonly args: readonly unknown[];
+  }[],
+): Promise<
+  readonly ({ status: 'success'; result: unknown } | { status: 'failure'; error: Error })[]
+> {
+  const settled = await Promise.allSettled(
+    contracts.map((c) =>
+      client.readContract({
+        address: c.address,
+        // biome-ignore lint/suspicious/noExplicitAny: heterogeneous ABIs across the 9 legs.
+        abi: c.abi as any,
+        functionName: c.functionName,
+        args: c.args,
+      }),
+    ),
+  );
+  return settled.map((s) =>
+    s.status === 'fulfilled'
+      ? { status: 'success' as const, result: s.value }
+      : { status: 'failure' as const, error: s.reason as Error },
+  );
+}
+
 function toQuoteResult(raw: {
   creditOut: bigint;
   usdgSpent: bigint;
@@ -114,34 +152,38 @@ export async function readTreasury(
     { address: addresses.staking, abi: stakingAbi, functionName: 'PERIOD', args: [] },
   ] as const;
 
-  let results: readonly (
-    | { status: 'success'; result: unknown }
-    | { status: 'failure'; error: Error }
-  )[];
+  type LegResult = { status: 'success'; result: unknown } | { status: 'failure'; error: Error };
+
+  let results: readonly LegResult[];
   let usedMulticall: boolean;
 
   try {
-    results = await client.multicall({ contracts: [...contracts], allowFailure: true });
-    usedMulticall = true;
+    const multicallResults = await client.multicall({
+      contracts: [...contracts],
+      allowFailure: true,
+    });
+    if (multicallResults.every((r) => r.status === 'failure')) {
+      // `allowFailure: true` means `client.multicall()` never throws for a down/broken
+      // Multicall3 — every leg comes back `{status:'failure'}` instead (see this file's header
+      // comment). That's indistinguishable, leg-by-leg, from "every read happened to revert",
+      // but 9 unrelated reads (5 different contracts) all reverting at once is the Multicall3
+      // aggregator being unavailable, not a coincidence — so treat it as the fallback signal and
+      // degrade to sequential reads, one `readContract` call at a time, through the same
+      // (fallback-wrapped) client.
+      results = await sequentialReadContracts(client, contracts);
+      usedMulticall = false;
+    } else {
+      // Partial failure (some legs ok, some not) is a real per-leg result, not "multicall is
+      // down" — keep it as-is so quote reverts still degrade to `null` (AC3) and a failing
+      // required leg still throws its typed error, without masking either behind a full
+      // sequential retry.
+      results = multicallResults;
+      usedMulticall = true;
+    }
   } catch {
-    // Multicall itself is unavailable/broken (not: one leg reverted — allowFailure already
-    // covers that) — fall back to the same 9 reads run sequentially, one `readContract` call at
-    // a time, through the same (fallback-wrapped) client.
-    const settled = await Promise.allSettled(
-      contracts.map((c) =>
-        client.readContract({
-          address: c.address,
-          abi: c.abi,
-          functionName: c.functionName,
-          args: c.args as readonly unknown[],
-        }),
-      ),
-    );
-    results = settled.map((s) =>
-      s.status === 'fulfilled'
-        ? { status: 'success' as const, result: s.value }
-        : { status: 'failure' as const, error: s.reason as Error },
-    );
+    // Belt-and-suspenders: not reachable with viem@2.56.8's `allowFailure: true` (see header
+    // comment), but kept in case some other transport/viem version does throw here.
+    results = await sequentialReadContracts(client, contracts);
     usedMulticall = false;
   }
 
