@@ -187,6 +187,73 @@ period id). Time-boxed to 45 min per tasks/S-04.md; resolved well inside that �
   settlement for" half of the algorithm is untested against live data (fake-client tests only —
   see tasks/S-04.md Blocked on).
 
+## P-7b (2026-09-19)
+
+USDG → ORBIO swap route on chain 4663 — **PARTIAL** (pools found with real liquidity on both
+legs; no quoter, no confirmed public swap entrypoint). Read-only, no tx, no private key, 60 min
+box (tasks/P-7b.md), `scripts/probes/p7b-swap-route.ts` (viem, `https://robinhood-rpc.publicnode.com`
++ `https://rpc.ordofi.network`). Full run: 23 JSON lines, this section is the distillation.
+
+### Contract table
+
+| Contract | Address | Evidence | Confidence |
+|---|---|---|---|
+| Staking | `0xE0710011278BFb63E57C5f227E5980984B1EDDca` | Known (PRD §3). `addresses()` **reverted** on a live call (both RPCs) — contradicts PRD §3 "verified selector, 7 addresses" / `packages/core/abi/README.md`'s claim. See *Discovered* below. | High (address) / **contradicted** (the `addresses()` claim) |
+| Payout | `0x4Cbbbf652B11eD1294dF0Ac49D8322394310CfC5` | Known (PRD §3, `.env.example`). 2,937 bytes. `poolManager()` **succeeds** → returns `0x8366a39CC670B4001A1121B8F6A443A643e40951`. Bytecode dispatch table contains the literal `unlock(bytes)` selector (`0x48c89491`) — Payout itself is a caller into that PoolManager's unlock/callback pattern. Bytecode also embeds USDG/ORBIO/NVDA/EXCHANGE as PUSH32-padded constants, plus one more (below). Matches PRD §3's own description "Payout converts USDG → NVDA → ORBIO" almost exactly — **Payout is very likely the actual swap-execution contract**, not a generic Uniswap router. | High (it's the swap contract) / **not found** (its public entrypoint's exact signature — no zero-arg getter matched; would need verified source or a real disassembly pass beyond this box) |
+| PoolManager (real, non-canonical) | `0x8366a39CC670B4001A1121B8F6A443A643e40951` | **New — not in PRD/`.env.example`.** Found via Payout's `poolManager()` call. 24,009 bytes (matches a full v4 PoolManager). `owner()` succeeds and **exactly equals** `extsload(0x0)` — the storage-slot-0-is-owner pattern from v4-core's `Owned` base contract. `unlock(bytes)` selector present in its own dispatch table. Computed `Pool.State` slot (see Pool findings) for the known ORBIO/NVDA pool id returns a plausible, non-garbage slot0 + nonzero liquidity. | High |
+| PoolManager (canonical Uniswap deploy) | `0x000000000004444c5dc75cB358380D2e3dE08A90` | Checked directly: **no code** on 4663. Confirms PRD §3 ("canonical PoolManager address has no code there") — now directly verified live, not just asserted. | High |
+| UniversalRouter (canonical Uniswap deploy) | `0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af` | **New finding, important trap.** DOES have code on 4663 (19,499 bytes — genuinely the real UniversalRouter bytecode: `execute(bytes,bytes[])` and `execute(bytes,bytes[],uint256)` selectors both present). Its `poolManager()` getter **succeeds** but returns the *canonical* (no-code) PoolManager address above, not the real one. **This router is deployed but non-functional on 4663 — do not call it for a real swap**, it will always fail/no-op against a dead PoolManager reference. | High |
+| Small constant in Payout's bytecode | `0xfFfd8963EFd1fC6A506488495d951d5263988d25` | Extracted as a PUSH20 literal from Payout's bytecode. **No code** at this address (EOA, or unfunded/undeployed). Unclear role (possibly an admin/fee-recipient constant) — not part of the swap route. | Low relevance |
+| Credit / Orbio / USDG / NVDA / Exchange | (PRD §3 addresses) | Cross-checked: none respond to any pool/router selector (as expected — plain ERC-20s / the CREDIT book, unrelated to the ORBIO/NVDA/USDG AMM legs). USDG's tiny 170-byte bytecode and its own `owner()` (`0xcfa0388f...a14c6f`) are consistent with it being a thin proxy; not investigated further (out of scope). | High (no swap role) |
+
+### Pool findings
+
+Method: no separate StateView contract was found among any candidate, so slot0/liquidity were
+read directly off the real PoolManager (`0x8366a39...`) via `extsload(bytes32)`, using
+v4-periphery `StateView.sol`'s own published formula (`POOLS_SLOT = bytes32(uint256(6))`,
+`stateSlot = keccak256(poolId ++ uint256(6))`, `slot0` at offset 0, `liquidity` at offset +3).
+**This formula is UNVERIFIED against this specific (non-canonical) deployment's actual source**
+— treated as corroborated, not proven, by the internal-consistency checks below.
+
+- **ORBIO/NVDA** (poolId `0xa95b1fbdccb15d2b07509b980f63adab8a94303b1781f5ebc53b72942d12ddc1`, So-supplied, docs/api-notes.md "P-7" 2026-09-08): `sqrtPriceX96 = 1167351818004912591988897556`, `tick = -84357`, `protocolFee = 0`, `lpFee = 0`, **liquidity = 0x1382ec98f6ead8600d51 (nonzero)**. Plausible, non-garbage values (fee fields exactly zero, tick well within int24 range) — corroborates both the PoolManager id and the POOLS_SLOT formula.
+- **NVDA/USDG**, computed poolId (currency0/1 sorted by address, hooks `0x0`) at each standard v4 fee tier:
+  - fee 500 / tickSpacing 10 → tick 222284, **liquidity nonzero** (`0xb9fa6e6a71a`), decoded `lpFee = 500` — **exactly matches the fee used to compute the poolId**, the strongest internal-consistency signal available without a verified ABI call. Real pool, real liquidity.
+  - fee 3000 / tickSpacing 60 → tick 222290, **liquidity nonzero** (`0x815c943ce83bbe8`), decoded `lpFee = 3000` — same match. Real pool, real liquidity.
+  - fee 0 / tickSpacing 1 → decoded `lpFee = 0` (matches), liquidity = 0 — pool initialized, never seeded.
+  - fee 10000 / tickSpacing 200 → `sqrtPriceX96 = 4295128740`, `tick = -887272` — one unit off Uniswap's canonical `MIN_SQRT_PRICE` (4295128739) and *exactly* `MIN_TICK`; liquidity = 0. Signature of a pool `initialize()`d at the minimum bound and never seeded.
+  - Net read: NVDA/USDG has real, live liquidity at the 500 and 3000 fee tiers. Combined with the confirmed ORBIO/NVDA leg, **both legs of the documented USDG → NVDA → ORBIO route have real on-chain liquidity** on the non-canonical PoolManager at `0x8366a39...`.
+- Explorer check (ticket step 3): `https://robin.etherscan.io/address/<addr>` returns HTTP 403 with a Cloudflare "Just a moment..." challenge page from this sandbox — **unreachable**, exactly as the ticket anticipated. Source/ABI verification for Payout or the PoolManager could not be attempted; a human with a real browser would need to check `#code` / `#writeContract` there.
+
+### Verdict — PARTIAL
+
+**Pools exist with real liquidity on both legs (ORBIO/NVDA confirmed by So + this probe;
+NVDA/USDG confirmed by this probe at fee 500/3000). No Quoter/StateView periphery contract
+exists on 4663, and no public, safely-callable swap entrypoint was confirmed** — Payout is the
+strong candidate (its own description matches PRD §3 exactly, and it holds the real
+PoolManager's address + calls `unlock`), but its externally-callable function signature wasn't
+discovered within the 60-minute box (needs verified source, or a real disassembly pass, or an
+answer from Yash). The canonical Uniswap UniversalRouter has code on 4663 but is **wired to the
+wrong (no-code) PoolManager and will not work** — do not use it.
+
+Recommendation for S-07/T-7: (1) ask Yash directly for Payout's public swap-trigger function
+signature — fastest path, and it's plausibly a single, deliberately-simple function given
+Payout's small size (2,937 bytes); (2) in parallel, ship PRD §T-7's manual fallback exactly as
+written — policy emits a `stakeup` alert with a deep link and amount, page shows "manual
+stake-up pending". Manual deep link for a human, **unconfirmed** (explorer unreachable from
+this sandbox to verify Payout's contract is actually verified/has a write tab):
+`https://robin.etherscan.io/address/0x4Cbbbf652B11eD1294dF0Ac49D8322394310CfC5#writeContract`.
+Do not build T-7's automated leg against the canonical UniversalRouter/PoolManager addresses —
+confirmed dead on this chain.
+
+**Discovered**: `Staking.addresses()` reverted on two live RPCs (`publicnode`, `ordofi`) during
+this probe — this directly contradicts PRD §3's "`addresses()` (7 addresses)" being in the
+"verified by eth_call on 2026-09-16" list, and `packages/core/abi/README.md`'s claim that
+`addresses()`'s selector (if not its return shape) is verified. Either the function requires an
+argument this probe didn't try, the selector's signature differs from the zero-arg
+`stakingAbi` entry, or the 2026-09-16 verification was against a different Staking
+deployment/state. Flagging for whoever owns T-4/T-7's Staking reads next — `addresses()` should
+not be relied on as a source of the swap-route addresses until this is resolved.
+
 ## Endpoints discovered
 
 _(one section per endpoint: method, URL, auth, request sample, response sample (redacted), quirks)_

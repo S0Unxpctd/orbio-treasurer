@@ -14,6 +14,39 @@ Is there a callable, quotable on-chain route to buy ORBIO with USDG on Robinhood
 `docs/api-notes.md` section + this ticket's Evidence + a one-paragraph recommendation for S-07: automated swap (with the exact call sequence) or manual deep link (with the exact URL a human would use).
 
 ## Status
-todo
+done
 
 ## Evidence
+
+**Verdict: PARTIAL.** Full detail in `docs/api-notes.md` "P-7b (2026-09-19)"; script:
+`scripts/probes/p7b-swap-route.ts` (viem, read-only, no tx, no private key, both RPCs).
+
+- `Staking.addresses()` **reverted live** on both RPCs — contradicts PRD §3's "verified
+  selector, 7 addresses" claim. Flagged in api-notes.md *Discovered*.
+- `Payout` bytecode (2,937 bytes) extraction (proper PUSH-immediate-skipping disassembly, not
+  a blind regex) found 6 address constants: USDG, ORBIO, NVDA, EXCHANGE (all known) + one new
+  contract + one no-code address. `Payout.poolManager()` **succeeds**, returning the new
+  contract `0x8366a39CC670B4001A1121B8F6A443A643e40951` — a real (non-canonical) Uniswap v4
+  PoolManager: 24,009 bytes, `owner()` == `extsload(0x0)` (v4-core's `Owned` slot-0 pattern),
+  `unlock(bytes)` selector present in both Payout's and this contract's own bytecode dispatch
+  table.
+- Canonical v4 PoolManager (`0x000000000004444c5dc75cB358380D2e3dE08A90`) confirmed **no code**
+  on 4663 (PRD §3's claim, now directly verified live). Canonical UniversalRouter
+  (`0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af`) **does** have code but its `poolManager()`
+  points at that dead canonical address — deployed but non-functional here, do not use.
+- Pool reads via `extsload` of the computed `Pool.State` slot (v4-periphery `StateView.sol`'s
+  own `POOLS_SLOT=6` formula, unverified against this exact deployment but internally
+  consistent — decoded `lpFee` from storage matches the fee tier used to compute each poolId):
+  ORBIO/NVDA (So's known pool id) has nonzero liquidity, plausible tick/fees; NVDA/USDG
+  candidate pools at fee 500 and fee 3000 also have nonzero liquidity with matching decoded
+  `lpFee`. **Both legs of the USDG → NVDA → ORBIO route have real on-chain liquidity.**
+- No Quoter/StateView contract found; no confirmed public swap-entrypoint signature on Payout
+  (the strong candidate contract) within the 60-min box. Explorer check (`robin.etherscan.io`)
+  returned HTTP 403 / Cloudflare challenge from this sandbox — unreachable, as anticipated.
+
+**Recommendation for S-07/T-7**: ask Yash for Payout's exact swap-trigger signature (fastest —
+Payout is almost certainly the contract PRD §3 already names); in parallel ship PRD §T-7's
+manual fallback (alert + deep link) exactly as specified. Do not target the canonical
+UniversalRouter/PoolManager addresses — confirmed dead on this chain. Manual deep link for a
+human (unconfirmed — explorer unreachable to verify a write tab exists):
+`https://robin.etherscan.io/address/0x4Cbbbf652B11eD1294dF0Ac49D8322394310CfC5#writeContract`.
