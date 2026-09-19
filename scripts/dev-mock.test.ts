@@ -40,37 +40,33 @@ afterAll(() => {
 });
 
 describe('pnpm dev:mock — README "Run it locally" zero-external-accounts quickstart', () => {
-  it(
-    'GET /v1/models (the README\'s literal curl target) returns real Orbio-shaped ids with no ORBIO_KEY/ORBIO_GATEWAY_BASE_URL set here',
-    async () => {
-      const childEnv = { ...process.env };
-      delete childEnv.ORBIO_KEY;
-      delete childEnv.ORBIO_GATEWAY_BASE_URL;
-      child = spawn(
-        process.execPath,
-        ['--import', 'tsx', 'scripts/mock-upstream.ts', '-p', String(PORT)],
-        { cwd: REPO_ROOT, env: childEnv },
-      );
+  it("GET /v1/models (the README's literal curl target) returns real Orbio-shaped ids with no ORBIO_KEY/ORBIO_GATEWAY_BASE_URL set here", async () => {
+    const childEnv = { ...process.env };
+    delete childEnv.ORBIO_KEY;
+    delete childEnv.ORBIO_GATEWAY_BASE_URL;
+    child = spawn(
+      process.execPath,
+      ['--import', 'tsx', 'scripts/mock-upstream.ts', '-p', String(PORT)],
+      { cwd: REPO_ROOT, env: childEnv },
+    );
 
-      await waitForReady(`http://localhost:${PORT}/api/health`, 20_000);
+    await waitForReady(`http://localhost:${PORT}/api/health`, 20_000);
 
-      const res = await fetch(`http://localhost:${PORT}/v1/models`);
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as { data: Array<{ id: string }> };
-      const ids = body.data.map((m) => m.id);
-      expect(ids).toEqual(
-        expect.arrayContaining([
-          'orbio/tiny-instruct',
-          'orbio/small-chat',
-          'orbio/mid-reasoner',
-          'orbio/large-flagship',
-          'auto',
-          'auto:S',
-          'auto:M',
-          'auto:L',
-        ]),
-      );
-    },
-    30_000,
-  );
+    const res = await fetch(`http://localhost:${PORT}/v1/models`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<{ id: string }> };
+    const ids = body.data.map((m) => m.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'orbio/tiny-instruct',
+        'orbio/small-chat',
+        'orbio/mid-reasoner',
+        'orbio/large-flagship',
+        'auto',
+        'auto:S',
+        'auto:M',
+        'auto:L',
+      ]),
+    );
+  }, 30_000);
 });

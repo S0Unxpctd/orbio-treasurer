@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { startFakeUpstream, type FakeUpstream } from '../apps/web/test/fake-upstream.js';
+import { type FakeUpstream, startFakeUpstream } from '../apps/web/test/fake-upstream.js';
 
 const WEB_APP_DIR = fileURLToPath(new URL('../apps/web/', import.meta.url));
 const NEXT_BIN = join(WEB_APP_DIR, 'node_modules', '.bin', 'next');
@@ -29,8 +29,12 @@ export function startMockUpstream(): Promise<FakeUpstream> {
 
 async function main(): Promise<void> {
   const upstream = await startMockUpstream();
-  console.log(`[dev:mock] fake Orbio upstream (in-process, synthetic fixtures) at ${upstream.baseUrl}`);
-  console.log('[dev:mock] no real Orbio account needed — ORBIO_GATEWAY_BASE_URL/ORBIO_KEY below point at it.');
+  console.log(
+    `[dev:mock] fake Orbio upstream (in-process, synthetic fixtures) at ${upstream.baseUrl}`,
+  );
+  console.log(
+    '[dev:mock] no real Orbio account needed — ORBIO_GATEWAY_BASE_URL/ORBIO_KEY below point at it.',
+  );
 
   // Extra CLI args (e.g. `-p 3919`) are forwarded to `next dev` — used by
   // `scripts/dev-mock.test.ts` to pin a non-default port instead of colliding with a real `pnpm
