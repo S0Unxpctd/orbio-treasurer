@@ -9,13 +9,14 @@
     "start": "next start",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "smoke": "echo 'smoke: playwright lands in T-019' && exit 0"
+    "smoke": "echo 'smoke: run `pnpm smoke` from the repo root (S-08: scripts/smoke.ts)' && exit 0"
   },
   "dependencies": {
     "@orbio-treasurer/core": "workspace:*",
     "next": "^16.3.4",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "zod": "^4.1.13"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

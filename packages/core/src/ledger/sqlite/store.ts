@@ -41,7 +41,19 @@ import type {
 import { CallerKeyAlreadyRevokedError, NotFoundError } from '../types.js';
 import { assertTxHash, assertUtcIso, newId } from '../util.js';
 
-const SCHEMA_SQL = readFileSync(new URL('./schema.sql', import.meta.url), 'utf8');
+// Discovered (tasks/S-08.md AC6): plain `readFileSync(new URL('./schema.sql', import.meta.url))`
+// works under Node/tsx/Vitest but breaks when this module is bundled into Next.js's webpack
+// server build (apps/web is the first ticket to load SqliteLedgerStore from inside the Next
+// app) two ways in a row: (1) the URL instance webpack's `import.meta.url` produces fails
+// Node's internal `instanceof URL` check inside both `fs` and `node:url`'s `fileURLToPath`, and
+// (2) webpack specifically pattern-matches the literal `new URL('...', import.meta.url)` call
+// shape as a static-asset import and rewrites it to an emitted `/_next/static/...` URL instead
+// of a real file path. Routing `import.meta.url` through a variable first defeats webpack's
+// syntactic pattern match (so this stays a plain runtime URL resolution, not an asset import),
+// and reading `.pathname` off the result avoids the `instanceof URL` check entirely — plain
+// string in, plain string out (POSIX paths only, matching ARCHITECTURE.md's Linux/macOS target).
+const here = import.meta.url;
+const SCHEMA_SQL = readFileSync(decodeURIComponent(new URL('./schema.sql', here).pathname), 'utf8');
 
 function toBoolInt(value: boolean): 0 | 1 {
   return value ? 1 : 0;
@@ -319,6 +331,13 @@ export class SqliteLedgerStore implements LedgerStore {
       .get(params) as Record<string, unknown> | undefined;
     if (!dbRow) throw new NotFoundError('agents', id);
     return mapAgentRow(dbRow);
+  }
+
+  async listPublicAgents(): Promise<AgentRow[]> {
+    const dbRows = this.db
+      .prepare('select * from agents where public = 1 order by created_at desc')
+      .all() as Record<string, unknown>[];
+    return dbRows.map(mapAgentRow);
   }
 
   // --- key_meta ---
