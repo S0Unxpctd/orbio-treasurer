@@ -106,12 +106,15 @@ real code, run on real capital, but the "volume" side of the loop has no real ca
 
 ## Run it locally
 
-No accounts, no chain access, no Supabase — SQLite only:
+No database account, no chain access, no Supabase — SQLite only. Two variants:
+
+**Zero external accounts** (a judge can run this — no Orbio key needed either; the gateway is
+pointed at an in-process fake upstream replaying real, dated fixtures, `apps/web/test/fake-upstream.ts`):
 
 ```
 pnpm install
 pnpm --filter @orbio-treasurer/core build
-cd apps/web && pnpm dev --webpack   # http://localhost:3000
+pnpm dev:mock   # http://localhost:3000
 ```
 
 In another shell, seed a reference agent and a key, then hit the gateway:
@@ -120,6 +123,13 @@ In another shell, seed a reference agent and a key, then hit the gateway:
 pnpm seed:agent --with-key --label local
 curl -s http://localhost:3000/v1/models | jq '.data[].id'
 ```
+
+**Real inference** (real Orbio pricing/CREDIT, needs an Orbio account): set two server-side env
+vars before `cd apps/web && pnpm dev --webpack` — `ORBIO_GATEWAY_BASE_URL=https://api.orbio.so/api/v1`
+and either `ORBIO_KEY=<an Orbio key with balance>` or `TREASURER_PRIVATE_KEY=0x<64 hex>` (a
+Robinhood Chain wallet key the gateway derives an Orbio key from). Without one of these two, every
+`/v1/*` call fails with a config error — the mock variant above exists so a stranger with neither
+can still run the quickstart end to end.
 
 `pnpm test` runs every package's suite (core, web, kit). `pnpm lint` / `pnpm typecheck` check the
 whole repo. `pnpm smoke` hits a running instance (`SMOKE_BASE_URL`, default `localhost:3000`).

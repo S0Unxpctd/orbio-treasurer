@@ -3,16 +3,26 @@
  * Fetches 1-3 RSS/Atom feeds, asks the Orbio Treasurer gateway (model: "auto") to summarise
  * them, prints the digest, and optionally posts it to a webhook. No dependencies beyond Node
  * built-ins (global fetch) — see the README's "What model: 'auto' does".
+ *
+ * S-10 fix (tasks/S-10.md Test report Blocker 3): the old default feeds included
+ * theverge.com/rss/index.xml, which Cloudflare 403s for Node's default `fetch` (client-fingerprint
+ * block, reproduced independent of network egress — identical `curl` from the same host got
+ * 200). Both defaults below were verified live with `node -e "fetch(url).then(r=>console.log(r.status))"`
+ * to return 200 with no browser User-Agent needed; a `User-Agent` is still sent on every feed
+ * fetch as further insurance. A single feed failing (non-200 or network error) is now logged as
+ * one line and skipped — the digest still runs on whichever feeds succeeded; only exhausting
+ * every feed (or the gateway being unreachable) exits 1.
  */
 
 const TREASURER_URL = process.env.ORBIO_TREASURER_URL;
 const TREASURER_KEY = process.env.ORBIO_TREASURER_KEY;
-const DEFAULT_FEEDS = 'https://hnrss.org/frontpage,https://www.theverge.com/rss/index.xml';
+const DEFAULT_FEEDS = 'https://hnrss.org/frontpage,https://github.blog/feed/';
 const FEEDS = (process.env.FEEDS ?? DEFAULT_FEEDS)
   .split(',')
   .map((url) => url.trim())
   .filter(Boolean)
   .slice(0, 3);
+const FEED_USER_AGENT = 'orbio-agent/1.0';
 const DIGEST_WEBHOOK_URL = process.env.DIGEST_WEBHOOK_URL;
 const X_WEBHOOK_URL = process.env.X_WEBHOOK_URL;
 const BASELINE_MODEL = process.env.BASELINE_MODEL;
@@ -55,8 +65,8 @@ function extractTitles(xml, max) {
 }
 
 async function fetchFeedTitles(url, maxPerFeed) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`feed fetch failed: ${res.status}`);
+  const res = await fetch(url, { headers: { 'user-agent': FEED_USER_AGENT } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const xml = await res.text();
   return extractTitles(xml, maxPerFeed);
 }
@@ -67,13 +77,26 @@ async function main() {
     return;
   }
 
-  let items;
-  try {
-    const perFeed = Math.max(1, Math.ceil(6 / FEEDS.length));
-    const titlesByFeed = await Promise.all(FEEDS.map((url) => fetchFeedTitles(url, perFeed)));
-    items = titlesByFeed.flat();
-  } catch {
-    fail('could not fetch one or more feeds');
+  // Each feed is fetched independently (`allSettled`, never a single `Promise.all` that rejects
+  // the whole batch on the first failure) — one bad feed logs one line and is skipped; the
+  // digest still runs on whatever succeeded. Exit 1 only when every feed failed.
+  const perFeed = Math.max(1, Math.ceil(6 / FEEDS.length));
+  const results = await Promise.allSettled(FEEDS.map((url) => fetchFeedTitles(url, perFeed)));
+  const items = [];
+  let anyFeedSucceeded = false;
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status === 'fulfilled') {
+      anyFeedSucceeded = true;
+      items.push(...result.value);
+    } else {
+      const reason = result.reason instanceof Error ? result.reason.message : 'unknown error';
+      console.error(`agent: feed ${FEEDS[i]} failed (${reason}) — skipping`);
+    }
+  }
+
+  if (!anyFeedSucceeded) {
+    fail('could not fetch any feed');
     return;
   }
 

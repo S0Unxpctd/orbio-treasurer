@@ -103,6 +103,28 @@ function startFakeRss(): Promise<FakeRss> {
   });
 }
 
+/** A fake feed server that returns a fixed HTTP status for every request (S-10 fix, tasks/S-10.md
+ *  Test report Blocker 3: one feed failing must not fail the whole run). */
+function startStatusRss(status: number): Promise<FakeRss> {
+  return new Promise((resolve, reject) => {
+    const server: Server = createServer((_req, res) => {
+      res.writeHead(status);
+      res.end('error');
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        reject(new Error('fake status RSS server failed to bind a port'));
+        return;
+      }
+      resolve({
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        close: () => new Promise((res) => server.close(() => res())),
+      });
+    });
+  });
+}
+
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -256,6 +278,62 @@ describe('S-09 kit vs. a real local gateway (AC2, AC3, AC4, AC6)', () => {
     };
     const matching = agents.agents.filter((a) => a.name === name);
     expect(matching).toHaveLength(1);
+  });
+
+  it('S-10 fix (Blocker 3): one failing feed is logged and skipped; the digest still runs on the rest', async () => {
+    const name = 'e2e-partial-feed';
+    const create = await runNode(
+      process.execPath,
+      [BIN_PATH, name, '--gateway', gatewayUrl(), '--key', TEST_KEY],
+      { cwd: scaffoldRoot },
+    );
+    expect(create.status).toBe(0);
+    const agentDir = join(scaffoldRoot, name);
+
+    const badFeed = await startStatusRss(500);
+    try {
+      const run = await runNode(process.execPath, ['--env-file=.env', 'agent.mjs'], {
+        cwd: agentDir,
+        env: { ...process.env, FEEDS: `${fakeRss.baseUrl},${badFeed.baseUrl}` },
+      });
+      expect(run.status).toBe(0);
+      expect(run.stdout.trim().length).toBeGreaterThan(0);
+      const stderrLines = run.stderr.trim().split('\n').filter(Boolean);
+      expect(stderrLines).toHaveLength(1);
+      expect(stderrLines[0]).toContain('failed');
+      expect(stderrLines[0]).toContain('skipping');
+      expect(stderrLines[0]).not.toContain('at '); // no stack trace (CLAUDE.md #4)
+    } finally {
+      await badFeed.close();
+    }
+  });
+
+  it('S-10 fix (Blocker 3): every feed failing exits 1 with a one-line final error, no stack trace', async () => {
+    const name = 'e2e-all-feeds-down';
+    const create = await runNode(
+      process.execPath,
+      [BIN_PATH, name, '--gateway', gatewayUrl(), '--key', TEST_KEY],
+      { cwd: scaffoldRoot },
+    );
+    expect(create.status).toBe(0);
+    const agentDir = join(scaffoldRoot, name);
+
+    const badFeedA = await startStatusRss(500);
+    const badFeedB = await startStatusRss(404);
+    try {
+      const run = await runNode(process.execPath, ['--env-file=.env', 'agent.mjs'], {
+        cwd: agentDir,
+        env: { ...process.env, FEEDS: `${badFeedA.baseUrl},${badFeedB.baseUrl}` },
+      });
+      expect(run.status).not.toBe(0);
+      expect(run.stdout.trim()).toBe('');
+      const stderrLines = run.stderr.trim().split('\n').filter(Boolean);
+      expect(stderrLines.at(-1)).toBe('agent: could not fetch any feed');
+      expect(run.stderr).not.toContain('at ');
+    } finally {
+      await badFeedA.close();
+      await badFeedB.close();
+    }
   });
 
   it('AC4: gateway down → agent.mjs exits 1 with a one-line error, no stack trace, no key', async () => {

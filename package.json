@@ -22,7 +22,8 @@
     "treasury:read": "pnpm --filter @orbio-treasurer/core treasury:read",
     "treasury:buy": "pnpm --filter @orbio-treasurer/core treasury:buy",
     "treasury:claim": "pnpm --filter @orbio-treasurer/core treasury:claim",
-    "seed:agent": "tsx scripts/seed-reference-agent.ts"
+    "seed:agent": "tsx scripts/seed-reference-agent.ts",
+    "dev:mock": "tsx scripts/mock-upstream.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
