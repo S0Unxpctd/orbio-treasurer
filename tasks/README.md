@@ -8,7 +8,7 @@
 | [S-02](S-02.md) | Ledger extension: metering, caller keys, treasury events, chain snapshots, savings | core/ledger, supabase | — | in-test |
 | [S-03](S-03.md) | Treasury read (viem, chain 4663) + wallet-signed Orbio key | core/chain | S-02 | in-test |
 | S-04 | Settle → claim → activate (gated) | core/chain | S-03 | todo |
-| [S-05](S-05.md) | buyAndActivate (gated, capped) | core/chain | S-03 | in-code |
+| [S-05](S-05.md) | buyAndActivate (gated, capped) | core/chain | S-03 | in-audit |
 | S-06 | Tick + policy + wiring (recorder, keys, executors) | core/policy, apps/web | S-01, S-02, S-03 | todo |
 | S-07 | Stake-up: probe P-7b then buy ORBIO + stake, or manual fallback | core/chain | S-03 | todo |
 | [S-08](S-08.md) | Public page + /api/stats + /api/agents | apps/web | S-02, S-03 | in-code |

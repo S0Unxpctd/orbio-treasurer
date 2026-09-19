@@ -20,7 +20,8 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p scripts/tsconfig.json --noEmit",
     "gen:sql": "tsx scripts/gen-sql.ts",
-    "treasury:read": "tsx scripts/treasury-read.ts"
+    "treasury:read": "tsx scripts/treasury-read.ts",
+    "treasury:buy": "tsx scripts/treasury-buy.ts"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

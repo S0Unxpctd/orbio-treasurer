@@ -1,5 +1,31 @@
-/** chain/ — S-03 barrel. See tasks/S-03.md and docs/PRD-1.0-sprint.md §3. */
+/** chain/ — S-03/S-05 barrel. See tasks/S-03.md, tasks/S-05.md and docs/PRD-1.0-sprint.md §3-6. */
 
+export type {
+  BuyCaps,
+  BuyCreditDeps,
+  BuyCreditResult,
+  BuyExecClient,
+  BuyExecuteDeps,
+  BuyExecutionResult,
+  BuyHistoryInput,
+  BuyPlan,
+  BuyQuoteInput,
+  BuyRefusal,
+  BuyRefusalReason,
+  BuyWalletBalances,
+  PlanBuyInput,
+  ResolveBuyCapsOptions,
+} from './buy.js';
+export {
+  addressToBeneficiary,
+  buyCredit,
+  DEFAULT_MAX_FEE_GWEI,
+  DEFAULT_MIN_GAS_ETH,
+  executeBuy,
+  planBuy,
+  resolveBuyCaps,
+  resolveMaxFeeGweiCap,
+} from './buy.js';
 export type { RpcTracker } from './chain.js';
 export {
   createRobinhoodClient,
