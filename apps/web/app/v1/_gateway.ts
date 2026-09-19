@@ -77,7 +77,9 @@ export function getCatalog(env: Env): Promise<FetchedCatalog> {
   const baseUrl = getGatewayBaseUrl(env);
   let fetcher = catalogFetchersByBaseUrl.get(baseUrl);
   if (!fetcher) {
-    fetcher = createCachedCatalogFetcher(() => fetchModelCatalog(baseUrl, getUpstreamKey(env)));
+    fetcher = createCachedCatalogFetcher(async () =>
+      fetchModelCatalog(baseUrl, await getUpstreamKey(env)),
+    );
     catalogFetchersByBaseUrl.set(baseUrl, fetcher);
   }
   return fetcher();
