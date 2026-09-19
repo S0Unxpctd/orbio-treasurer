@@ -36,11 +36,23 @@ then push yourself. Confirm: `git log --oneline -5` on `main` shows the latest t
    ```sql
    select * from cron.job where jobname = 'treasurer-tick';
    ```
-   should show one row, schedule `*/15 * * * *`. It errors on every run until step 4 below sets
+   should show one row, schedule `*/15 * * * *`. It errors on every run until step 5 below sets
    `app.tick_url`/`app.tick_secret` — harmless (visible in `cron.job_run_details`), or pause it
    first with `update cron.job set active = false where jobname = 'treasurer-tick';`.
 
-## 3. Vercel — project settings
+## 3. Seed the reference agent (once, right after migrations)
+
+```
+pnpm seed:agent
+```
+Idempotent — creates the `REFERENCE_AGENT_SLUG` agent row if it doesn't exist yet, no-ops if it
+does. Run this now, before cron wiring or any tick ever fires: doing it here (immediately after
+step 2's migrations, against the same `DATABASE_URL`/`SUPABASE_*` values used above) avoids the
+race S-06's tester noted — two concurrent first-ever ticks both trying to create the same agent
+row. `pnpm seed:agent --with-key --label demo` also prints one caller key, shown once — save it
+immediately.
+
+## 4. Vercel — project settings
 
 - Framework Preset: **Next.js**.
 - Root Directory: **`apps/web`**.
@@ -88,7 +100,7 @@ Run from `apps/web` itself (as Vercel does with Root Directory set that way), it
 `cd ../.. && pnpm --filter @orbio-treasurer/web... build` — confirmed to produce `apps/web/.next`
 in place, exit 0.
 
-## 4. Cron wiring
+## 5. Cron wiring
 
 Once the Vercel deployment has a URL:
 ```sql
@@ -99,7 +111,7 @@ Re-run the `cron.job` check from step 2.3 — the command now resolves both sett
 scheduled run (every 15 min) should succeed with no `current_setting` error in
 `cron.job_run_details`.
 
-## 5. Environment variables (Vercel — Production + Preview)
+## 6. Environment variables (Vercel — Production + Preview)
 
 Every variable this table doesn't list is not needed for this deployment — see "Not set for
 this deploy" below for why, one line per variable, so nothing here silently disappears.
@@ -122,11 +134,13 @@ this deploy" below for why, one line per variable, so nothing here silently disa
 | `USDG_ADDRESS` | required | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` | PRD §3 (corrected checksum casing — see `docs/api-notes.md` "S-03 chain reads" Discovered) |
 | `NVDA_ADDRESS` | required | `0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC` | PRD §3 |
 | `PAYOUT_ADDRESS` | required | `0x4Cbbbf652B11eD1294dF0Ac49D8322394310CfC5` | PRD §3 |
-| `TICK_SECRET` | required | a fresh random string | generate yourself (`openssl rand -hex 32`); also goes into the `alter database` statement in step 4 |
+| `TICK_SECRET` | required | a fresh random string | generate yourself (`openssl rand -hex 32`); also goes into the `alter database` statement in step 5 |
 | `REFERENCE_AGENT_SLUG` | optional (default `treasurer`) | `treasurer` | only set if you renamed the reference agent |
 | `GATEWAY_KEYS` | optional fallback | `otk_...,otk_...` | comma list of caller keys, checked only when a key isn't found in the DB-backed `caller_keys` table (`pnpm keys:create`) |
 | `ORBIO_KEY` | optional | an Orbio-issued API key | alternative to deriving a key from `TREASURER_PRIVATE_KEY`; the derived key wins if both are set |
-| `TREASURER_LIVE` | required | `false` | **leave `false`** until So writes `ok live <ticket>` — see step 7 |
+| `TREASURER_LIVE` | required | `false` | **leave `false`** until So writes `ok live <ticket>` — see step 8 |
+| `BOOK_CLIENT` | optional (default `readonly`) | `readonly` | **leave at the default.** `orbio` is the legacy Whop-checkout book-buy gate from the pre-sprint PRD; this sprint's book quote comes from a live `Exchange.getQuote()` chain read instead — see "Not set for this deploy" |
+| `STAKE_CLIENT` | optional (default `none`) | `none` | **leave at the default.** `uniswap` is the legacy L2a stake-client gate; this sprint's stake-up leg (S-07) is blocked on Yash for a confirmed swap entrypoint (P-7b) and ships as a manual-fallback alert instead — see "Not set for this deploy" |
 | `BUY_MAX_USDG_PER_TX` | optional (default in `policy/defaults.ts`) | `10` | may only lower the code default, per ticket |
 | `BUY_MAX_PER_DAY` | optional | `1` | may only lower the code default |
 | `ACTIVATE_MAX_PER_DAY` | optional | `50` | may only lower the code default |
@@ -164,7 +178,7 @@ These `env.ts` variables exist for other configurations and don't apply here:
 - `NEXT_PUBLIC_SITE_URL` — declared in `env.ts`, not read anywhere in this sprint's code (the
   tick route and the page don't need to know their own public URL at runtime).
 
-## 6. Smoke test
+## 7. Smoke test
 
 ```
 SMOKE_BASE_URL=https://<vercel-host> pnpm smoke
@@ -179,7 +193,7 @@ never a secret). This runs the tick in dry-run (since `TREASURER_LIVE=false`); i
 `chain_snapshots` row and, if any policy condition would fire, a `dry_run` `treasury_events` row
 with a reason — visible on the page's Proof block, greyed out.
 
-## 7. First live tick — **[live]**
+## 8. First live tick — **[live]**
 
 Only after **So has written `ok live S-06`** (or the relevant ticket) in that ticket file.
 
@@ -201,13 +215,3 @@ Only after **So has written `ok live S-06`** (or the relevant ticket) in that ti
    60-second cache window, linked to `robin.etherscan.io/tx/<hash>`.
 4. To flip live off again: set `TREASURER_LIVE=false` in Vercel, redeploy. The ledger is
    append-only; nothing to roll back. Note any open item in the ticket's *Discovered* section.
-
-## 8. Seed the reference agent (once, before the first tick)
-
-```
-pnpm seed:agent
-```
-Idempotent — creates the `REFERENCE_AGENT_SLUG` agent row if it doesn't exist yet, no-ops if it
-does. Doing this before the first tick/cron fire avoids the race S-06's tester noted: two
-concurrent first-ever ticks both trying to create the same agent row. `pnpm seed:agent --with-key
---label demo` also prints one caller key, shown once — save it immediately.
