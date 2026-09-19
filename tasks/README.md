@@ -13,8 +13,8 @@
 | [P-7b](P-7b.md) | Probe: USDG → ORBIO swap path on 4663 (read-only) | docs | — | in-code |
 | S-07 | Stake-up: automated swap needs Payout's swap signature from Yash (P-7b PARTIAL); manual fallback alert+deep link shipped in S-06 | core/chain | P-7b | blocked (Yash) |
 | [S-08](S-08.md) | Public page + /api/stats + /api/agents | apps/web | S-02, S-03 | done |
-| [S-09](S-09.md) | Kit (`create-orbio-agent`) + demo agent | packages/create-orbio-agent, examples | S-01, S-06, S-08 | in-code (1 tester defect → S-10) |
-| [S-10](S-10.md) | README, landing copy, deploy checklist, seed, submission, Loom script | root, docs, apps/web, kit | all | in-code |
+| [S-09](S-09.md) | Kit (`create-orbio-agent`) + demo agent | packages/create-orbio-agent, examples | S-01, S-06, S-08 | done |
+| [S-10](S-10.md) | README, landing copy, deploy checklist, seed, submission, Loom script | root, docs, apps/web, kit | all | in-test (tester fixes applied) |
 
 ## v0.3 board (Sept 8–9, historical)
 
