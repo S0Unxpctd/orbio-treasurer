@@ -2,6 +2,15 @@
 
 Updated every evening by So after the merge. The judges may read this; keep it factual.
 
+## Sprint 1.0 — Day 11, 2026-09-19 (00:30 → 06:30 Paris)
+
+- Pivot ratified (PRD 1.0 sprint edition, docs/PRD-1.0-sprint.md): Orbio Treasurer = a routing gateway other agents call (`base_url` + `model:"auto"`) that sources inference below list on Orbio and stakes ORBIO on volume; public proof page; kit. Old MCP client frozen.
+- Shipped through Code → (Audit) → Test on Sonnet, orchestration on Fable: **S-01** gateway + router (done), **S-02** ledger extension (done, Postgres-verified), **S-03** treasury read + wallet-signed key (done; live reads on 4663), **S-08** public page + /api/stats + /api/agents (done; `next build` fixed for real), **S-05** buyAndActivate (audit ×2: a day-cap race and an unsound SQLite lock fallback found and fixed; tester done), **S-04** settle → claim → activate (audit ×2: a zero-address `activate` beneficiary Blocker found and fixed; in-test), **S-06** tick + policy + wiring (audit clean, 4 Minors; in-test), **S-09** kit + demo agent (in-test). **P-7b** PARTIAL: Payout's own v4 PoolManager found (0x8366…0951), both pool legs have liquidity, no public swap entrypoint identified → S-07 automated stake-up blocked on Yash (Payout swap signature); manual fallback (alert + deep link) shipped in S-06.
+- Suite: core 1,221 + web 82 + kit 12 tests green; `next build --webpack` passes all 8 routes.
+- Live numbers 2026-09-19: total staked 355.36M ORBIO; book quote 10 USDG → 13.33 CREDIT (25% discount, was 55% on the 16th); staking at period 82, 3600 s periods.
+- Blocked on So: Supabase project INACTIVE (restore), `.env.local` (TREASURER_PRIVATE_KEY, STAKER_ADDRESS, optional STAKER_PRIVATE_KEY), Vercel import, GitHub push (sandbox cannot push; bundles in `.sync/`), `ok live S-06` for the first live tick.
+- Budget spent on-chain: $0. No live transaction has been sent.
+
 ## Day 0 — 2026-09-07
 
 - Docs written: PRD 0.1, ARCHITECTURE, PROCESS, CLAUDE.md, 26 tickets.
