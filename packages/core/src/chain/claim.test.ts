@@ -514,6 +514,12 @@ describe('discoverLatestPeriodId — fake client (mirrors docs/api-notes.md "S-0
     const latest = await discoverLatestPeriodId(client, ADDRESSES, { hint: 500n });
     expect(latest).toBe(82n);
   });
+
+  it('a stale hint with NO existing id below it returns null (build note [S-06]: the internal "none found" sentinel is `-1n`, not `null` — this asserts the sentinel never leaks out as a bogus id)', async () => {
+    const client = fakeReadClient([]); // nothing exists at all, not even id 1
+    const latest = await discoverLatestPeriodId(client, ADDRESSES, { hint: 500n });
+    expect(latest).toBeNull();
+  });
 });
 
 describe('discoverPeriodsToSettle — fake client', () => {

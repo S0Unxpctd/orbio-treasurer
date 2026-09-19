@@ -115,6 +115,18 @@ env fallback): `pnpm keys:create --label <x> [--agent <slug>]` inserts a new `ot
 and prints the raw value exactly once — copy it immediately, it is not stored anywhere in
 readable form afterward (only its hash and `key_prefix`/`key_last4`).
 
+## Build: nft static evaluation and bigint constants
+
+`next build --webpack`'s output-file tracing (`@vercel/nft`) statically walks every module's AST
+trying to resolve constant values, including through `let` reassignment inside loops — and it can
+mis-resolve a `let x: bigint | null = null` (reassigned inside a loop, later combined with a
+bigint literal like `x + 1n`) to its `null` DECLARATION value instead of the reassignment, then
+crash with `TypeError: Cannot mix BigInt and other types` (`packages/core/src/chain/claim.ts`'s
+`discoverLatestPeriodId()`, fixed [S-06] by using a bigint sentinel (`-1n`) instead of `null`).
+Keep any "not found yet" sentinel that a bigint gets compared/combined against as a bigint
+literal (`-1n`, `0n`, etc.), never `null`/`undefined` — and re-run `cd apps/web && npx next build
+--webpack` after adding new bigint arithmetic near a nullable variable.
+
 ## Rollback
 
 Set `TREASURER_LIVE=false` → redeploy. The ledger is append-only; nothing to restore. Open buy orders (L2b) are resolved by Orbio; note their ids in the incident entry.
