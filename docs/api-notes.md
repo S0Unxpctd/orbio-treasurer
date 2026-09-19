@@ -140,6 +140,53 @@ U+00B7 MIDDLE DOT characters) matches the gateway's own derivation.
 
 Consequence: PRD 0.2 / ADR-003. Asked back (2026-09-08): read endpoint for the book? is listing holder surplus agentic? (§ Open questions 3–4.)
 
+## S-04 period discovery (2026-09-19)
+
+Live, read-only `eth_call`s via `https://robinhood-rpc.publicnode.com` (viem, no wallet, no
+`STAKER_ADDRESS` configured in this sandbox — every call below used the zero address or a bare
+period id). Time-boxed to 45 min per tasks/S-04.md; resolved well inside that — **not** blocked.
+
+- `Staking.rewardPeriod(0)` → **reverts** with selector `0x86bea250` (a custom error, no string
+  reason decoded from the 4-byte selector alone).
+- `Staking.rewardPeriod(1)` → `[1789480800, 1789484400, 81496947, 3017000000000000000000000,
+  81496947]`.
+- `Staking.rewardPeriod(2)` → `[1789484400, 1789488000, 94746096, 4506503303974465381709490780,
+  94746093]`.
+- `Staking.rewardPeriod(82)` → `[1789772400, 1789776000, 95103973, 1277452906707641120178295554314,
+  10187183]`. `Staking.rewardPeriod(83)` → reverts, same `0x86bea250` selector.
+- At call time, `latest block.timestamp = 1789782340`. `Staking.rewardOf(0x0, 82)` → `0`
+  (succeeds — period 82 exists). `Staking.rewardOf(0x0, 83)` → reverts, same `0x86bea250`
+  selector as `rewardPeriod(83)`. `Staking.rewardOf(0x0, 0)` → also reverts, same selector.
+
+**Derivation** (ticket AC6 "derive which field is the period start"):
+- `rewardPeriod(id)[1]` of period *n* always equals `rewardPeriod(id)[0]` of period *n+1*
+  (`1789484400` closes period 1 and opens period 2) and the gap is always exactly `3600`
+  (`Staking.PERIOD()`, confirmed S-03). So **field[0] = periodStart (unix seconds)**,
+  **field[1] = periodEnd = periodStart + PERIOD**.
+- Periods are **not** unix-epoch-hour-indexed (a period id computed as `floor(now/3600)`, e.g.
+  `497161` at call time, reverts) — they're a small sequential counter starting at **1** (id `0`
+  reverts), created lazily as the contract runs. At call time the highest existing id was **82**
+  (`83` reverts) and `rewardPeriod(82)`'s own `periodEnd` (`1789776000`) was already ~1.76 h in
+  the past — i.e. the latest *existing* period had already ended with no id `83` yet created, so
+  "latest id" and "latest finalized id" are the same read (an id that reverts is simply "doesn't
+  exist yet", not "exists but unfinalized").
+- Field[2] and field[4] track together but aren't identical for recent periods (id 2:
+  `94746096` vs `94746093`; id 82: `95103973` vs `10187183`) while they're exactly equal for the
+  oldest probed period (id 1: `81496947` = `81496947`) — consistent with `{periodStart,
+  periodEnd, totalReward, totalWeight, settledReward}`, where `settledReward` (field[4]) trails
+  `totalReward` (field[2]) until every staker in that period has settled, and field[3]
+  (`~3.0e24`–`1.28e30` range, far larger than the other three) is the period's total staking
+  weight (amount × time), not a reward figure — not required for S-04's flow, not relied on.
+- Discovery algorithm implemented in `chain/claim.ts`'s `discoverLatestPeriodId()`: exponential
+  search doubling from `STAKING_LAST_PERIOD_HINT` (or `1` if unset) until a call reverts, then
+  binary search the gap — the same "revert = doesn't exist yet" signal this probe used by hand.
+  `STAKING_SETTLE_PERIODS` (comma list) remains available as a manual override per the ticket's
+  fallback clause, used whenever set (skips discovery entirely) — kept even though the 45-min
+  probe resolved, since this sandbox has no real `STAKER_ADDRESS`/`STAKER_PRIVATE_KEY` to run
+  `rewardOf(staker, id) > 0` against for real, so the "which ids does *our* staker still owe
+  settlement for" half of the algorithm is untested against live data (fake-client tests only —
+  see tasks/S-04.md Blocked on).
+
 ## Endpoints discovered
 
 _(one section per endpoint: method, URL, auth, request sample, response sample (redacted), quirks)_
