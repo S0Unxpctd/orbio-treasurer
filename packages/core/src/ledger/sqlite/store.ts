@@ -730,37 +730,40 @@ export class SqliteLedgerStore implements LedgerStore {
     return dbRow ? mapChainSnapshotRow(dbRow) : null;
   }
 
-  // --- withAgentLock (S-05 audit fix) ---
+  // --- withAgentLock (S-05 audit fix, pass 2: DB-level fallback removed as unsound) ---
 
   /**
-   * SQLite has exactly one connection here (`this.db`, synchronous, better-sqlite3) and no
-   * per-key advisory-lock primitive — SQLite's own write lock (what `BEGIN IMMEDIATE` takes) is
-   * scoped to the whole database file, not to a row or a key. Two guarantees, stacked:
+   * In-process only. This is deliberate, not a missing feature.
    *
-   *  - **In-process (the load-bearing one for this kit's single-process deployment):** a
-   *    `Map<agentId, Promise>` FIFO chain. A call for `agentId` is appended to that agent's own
-   *    chain and only runs once every earlier call queued under the SAME `agentId` has settled
-   *    (success or failure) — real serialization, not a re-check. A call for a DIFFERENT
-   *    `agentId` has its own chain and is never queued behind another agent's — it starts
-   *    immediately, regardless of what any other agent's call is doing. This alone already
-   *    closes the audit's race for every caller in this process (the only caller today: the CLI
-   *    and, once built, S-06's tick — both single-process).
-   *  - **Cross-process (best-effort, coarser):** whichever call is first to find `this.db` idle
-   *    (`!db.inTransaction`) wraps its `fn` in a real `BEGIN IMMEDIATE … COMMIT/ROLLBACK` —
-   *    SQLite's actual RESERVED write lock, held for the full duration of `fn` (including a live
-   *    on-chain send), which does block a second OS process's writer against the same file for
-   *    that whole window. This is *whole-database*, not per-agent (SQLite has nothing finer) —
-   *    so it is a strictly-safe over-approximation, never an under-lock.
-   *    A call that arrives while another agent's call already holds that lock does NOT nest a
-   *    SAVEPOINT inside it: a savepoint released before the outer `BEGIN IMMEDIATE` commits
-   *    would let THIS call's promise resolve successfully and then be silently erased later if
-   *    the outer call's transaction rolls back — worse than not wrapping at all. Instead it runs
-   *    `fn` unwrapped, relying on better-sqlite3/SQLite's per-statement autocommit for each
-   *    individual write `fn` makes. That's safe for `buyCredit()`'s purposes: the in-process
-   *    per-agentId chain above is what actually has to prevent two calls for the SAME agent from
-   *    racing, and it always does, unconditionally — this DB-level layer only adds
-   *    (a) multi-statement durability grouping and (b) real cross-process protection for
-   *    whichever call happens to get it first.
+   * SQLite here is one connection (`this.db`, synchronous, better-sqlite3) shared by whatever
+   * concurrent async calls this same process makes. `withAgentLock` gives each `agentId` its own
+   * `Map<agentId, Promise>` FIFO chain: a call for `agentId` is appended to that agent's chain and
+   * only runs once every earlier call queued under the SAME `agentId` has settled (success or
+   * failure) — real, observable serialization, not a check-then-act re-check. A call for a
+   * DIFFERENT `agentId` has its own chain and is never queued behind another agent's — it starts
+   * immediately regardless of what any other agent's call is doing. This is the only guarantee
+   * `withAgentLock` makes on SQLite, and it is sufficient for every real caller: per
+   * `ARCHITECTURE.md`, a kit deployment (`LEDGER=sqlite`) runs exactly one process per SQLite
+   * file, so "same agentId, same process" is the only concurrency that can ever occur against a
+   * given file.
+   *
+   * A previous version of this method also wrapped `fn` in a DB-level `BEGIN IMMEDIATE …
+   * COMMIT/ROLLBACK` whenever the connection was idle, meant as a best-effort cross-process lock.
+   * It was unsound and has been removed: `BEGIN IMMEDIATE` takes SQLite's write lock for the
+   * WHOLE connection, not per-agent, so once one agent's call had it open, any other statement
+   * that ran on the same connection — including a genuinely different agent's "unwrapped" write,
+   * which the old code deliberately did not wrap in its own transaction — became part of that
+   * SAME open transaction rather than an independent autocommitted statement (autocommit only
+   * applies when the connection is NOT already inside an explicit transaction). If the
+   * lock-holder's `fn` later threw and the outer code rolled back, the other agent's
+   * already-"successful" write silently vanished with it. There is no bolt-on fix that keeps this
+   * layer sound on a single synchronous connection: making a second agent's call genuinely wait
+   * for the first agent's transaction just turns "cross-process" into "cross-agent", i.e. an
+   * unnecessary serialization this store never promised and no caller needs. Real cross-process
+   * safety is a `PostgresLedgerStore` (`postgres/store.ts`) concern — `pg_advisory_xact_lock`
+   * there is a genuine per-agent, per-connection-pool primitive that SQLite has no equivalent of.
+   * If a future deployment ever needs concurrent multi-agent writers against one SQLite file,
+   * that is a new architecture decision (an ADR), not a patch to this method.
    */
   async withAgentLock<T>(agentId: Id, fn: () => Promise<T>): Promise<T> {
     const previous = this.agentLockChains.get(agentId) ?? Promise.resolve();
@@ -768,7 +771,7 @@ export class SqliteLedgerStore implements LedgerStore {
       () => undefined,
       () => undefined,
     );
-    const run = settledPrevious.then(() => this.runLockedTransaction(fn));
+    const run = settledPrevious.then(fn);
     this.agentLockChains.set(
       agentId,
       run.then(
@@ -777,25 +780,6 @@ export class SqliteLedgerStore implements LedgerStore {
       ),
     );
     return run;
-  }
-
-  private async runLockedTransaction<T>(fn: () => Promise<T>): Promise<T> {
-    const openedHere = !this.db.inTransaction;
-    if (openedHere) this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const result = await fn();
-      if (openedHere) this.db.exec('COMMIT');
-      return result;
-    } catch (err) {
-      if (openedHere) {
-        try {
-          this.db.exec('ROLLBACK');
-        } catch {
-          // best effort — if the connection is already broken, the original `err` is what matters.
-        }
-      }
-      throw err;
-    }
   }
 
   async close(): Promise<void> {
