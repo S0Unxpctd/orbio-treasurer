@@ -4,15 +4,14 @@
   "private": true,
   "type": "module",
   "bin": {
-    "create-orbio-agent": "./dist/index.js"
+    "create-orbio-agent": "./bin/create-orbio-agent.js"
   },
   "files": [
-    "dist",
-    "templates"
+    "bin",
+    "template",
+    "defaults.json"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

@@ -43,7 +43,8 @@
         "scripts/**",
         "packages/core/scripts/**",
         "packages/create-orbio-agent/**",
-        "apps/web/**"
+        "apps/web/**",
+        "examples/**"
       ],
       "linter": {
         "rules": {

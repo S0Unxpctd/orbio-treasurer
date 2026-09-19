@@ -1,0 +1,10 @@
+{
+  "name": "__AGENT_NAME__",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file=.env agent.mjs",
+    "register": "node --env-file=.env register.mjs"
+  }
+}

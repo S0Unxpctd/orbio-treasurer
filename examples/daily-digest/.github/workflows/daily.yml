@@ -1,0 +1,25 @@
+name: daily-digest daily digest
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run agent
+        env:
+          ORBIO_TREASURER_URL: https://<REFERENCE_HOST>
+          ORBIO_TREASURER_KEY: ${{ secrets.ORBIO_TREASURER_KEY }}
+        run: node agent.mjs
+      - name: Register agent
+        env:
+          ORBIO_TREASURER_URL: https://<REFERENCE_HOST>
+          ORBIO_TREASURER_KEY: ${{ secrets.ORBIO_TREASURER_KEY }}
+        run: node register.mjs
