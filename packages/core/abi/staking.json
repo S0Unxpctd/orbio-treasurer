@@ -1,0 +1,93 @@
+[
+  {
+    "name": "stake",
+    "type": "function",
+    "stateMutability": "nonpayable",
+    "inputs": [{ "type": "uint256", "name": "amount" }],
+    "outputs": []
+  },
+  {
+    "name": "settle",
+    "type": "function",
+    "stateMutability": "nonpayable",
+    "inputs": [{ "type": "uint256[]", "name": "periodIds" }],
+    "outputs": [{ "type": "uint256" }]
+  },
+  {
+    "name": "claim",
+    "type": "function",
+    "stateMutability": "nonpayable",
+    "inputs": [],
+    "outputs": [{ "type": "uint256" }]
+  },
+  {
+    "name": "settledOf",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [{ "type": "address", "name": "account" }],
+    "outputs": [{ "type": "uint256" }]
+  },
+  {
+    "name": "positionOf",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [{ "type": "address", "name": "account" }],
+    "outputs": [{ "type": "uint256" }]
+  },
+  {
+    "name": "rewardOf",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [{ "type": "address", "name": "account" }, { "type": "uint256", "name": "periodId" }],
+    "outputs": [{ "type": "uint256" }]
+  },
+  {
+    "name": "rewardPeriod",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [{ "type": "uint256", "name": "periodId" }],
+    "outputs": [
+      { "type": "uint256" },
+      { "type": "uint256" },
+      { "type": "uint256" },
+      { "type": "uint256" },
+      { "type": "uint256" }
+    ]
+  },
+  {
+    "name": "totalStaked",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [{ "type": "uint256" }]
+  },
+  {
+    "name": "MIN_POSITION",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [{ "type": "uint256" }]
+  },
+  {
+    "name": "PERIOD",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [{ "type": "uint256" }]
+  },
+  {
+    "name": "addresses",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [
+      { "type": "address" },
+      { "type": "address" },
+      { "type": "address" },
+      { "type": "address" },
+      { "type": "address" },
+      { "type": "address" },
+      { "type": "address" }
+    ]
+  }
+]
