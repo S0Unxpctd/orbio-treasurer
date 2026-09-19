@@ -311,9 +311,29 @@ describe('resolveBuyCaps — env override is downward-only (CLAUDE.md #5)', () =
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('env MIN_GAS_ETH overrides the default (not directionality-restricted)', () => {
-    const result = resolveBuyCaps({ env: { TREASURER_LIVE: false, MIN_GAS_ETH: '0.01' } });
+  it('env MIN_GAS_ETH higher than default RAISES the gas-safety floor (Minor/Question 2: floors may only go up)', () => {
+    const warn = vi.fn();
+    const result = resolveBuyCaps({ env: { TREASURER_LIVE: false, MIN_GAS_ETH: '0.01' }, warn });
     expect(result.minGasWei.toString()).toBe('10000000000000000');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('env MIN_GAS_ETH lower than default is IGNORED and logs a warning (Minor/Question 2)', () => {
+    const warn = vi.fn();
+    const result = resolveBuyCaps({ env: { TREASURER_LIVE: false, MIN_GAS_ETH: '0.0001' }, warn });
+    expect(result.minGasWei.toString()).toBe('500000000000000'); // unchanged (DEFAULT_MIN_GAS_ETH)
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/LOWER/);
+  });
+
+  it('an unparseable MIN_GAS_ETH is ignored (default kept) and warns, never throws', () => {
+    const warn = vi.fn();
+    const result = resolveBuyCaps({
+      env: { TREASURER_LIVE: false, MIN_GAS_ETH: 'not-a-number' },
+      warn,
+    });
+    expect(result.minGasWei.toString()).toBe('500000000000000');
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it('TREASURER_LIVE=true is reflected on the resolved caps', () => {
@@ -327,8 +347,17 @@ describe('resolveMaxFeeGweiCap', () => {
     expect(resolveMaxFeeGweiCap({ MAX_FEE_GWEI: undefined })).toBe(DEFAULT_MAX_FEE_GWEI);
   });
 
-  it('uses the env value when it is a valid positive number', () => {
-    expect(resolveMaxFeeGweiCap({ MAX_FEE_GWEI: '12.5' })).toBe(12.5);
+  it('uses the env value when it is lower than the default (a fee cap may only be lowered)', () => {
+    const warn = vi.fn();
+    expect(resolveMaxFeeGweiCap({ MAX_FEE_GWEI: '2.5' }, warn)).toBe(2.5);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a value that would RAISE the default fee cap is ignored and logs a warning (Minor/Question 2)', () => {
+    const warn = vi.fn();
+    expect(resolveMaxFeeGweiCap({ MAX_FEE_GWEI: '12.5' }, warn)).toBe(DEFAULT_MAX_FEE_GWEI);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/RAISE/);
   });
 
   it('falls back to the default and warns on an invalid value', () => {

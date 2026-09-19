@@ -99,9 +99,13 @@ const baseSchema = z.object({
   BUY_MAX_USDG_PER_TX: optionalString,
   BUY_MAX_PER_DAY: optionalString,
   // `executeBuy()`'s `maxFeePerGas` cap (gwei) and `planBuy()`'s minimum hot-wallet ETH balance
-  // (ETH) — both plain overrides, not downward-only (they're operational tuning, not the
-  // exposure caps rule 5 is about). Defaults live in chain/buy.ts (`DEFAULT_MAX_FEE_GWEI`,
-  // `DEFAULT_MIN_GAS_ETH`), not here, to match `RH_RPC_URLS`'s pattern above.
+  // (ETH) — both directionality-restricted (S-05 audit pass 1, Minor/Question 2), each toward
+  // whichever direction is safer for what it is: `MAX_FEE_GWEI` is a ceiling, so env may only
+  // LOWER it; `MIN_GAS_ETH` is a floor, so env may only RAISE it. A value that would move either
+  // the unsafe way is ignored and logged, never thrown — see chain/buy.ts's
+  // `resolveMaxFeeGweiCap()`/`resolveBuyCaps()`. Defaults live in chain/buy.ts
+  // (`DEFAULT_MAX_FEE_GWEI`, `DEFAULT_MIN_GAS_ETH`), not here, to match `RH_RPC_URLS`'s pattern
+  // above.
   MAX_FEE_GWEI: optionalString,
   MIN_GAS_ETH: optionalString,
 
