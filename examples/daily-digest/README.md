@@ -7,12 +7,17 @@ somewhere. No wallet, no database account, no chain knowledge needed here.
 ## Quickstart
 
 ```
-npx create-orbio-agent daily-digest   # (already done if you're reading this)
+npx create-orbio-agent daily-digest --gateway <treasurer-url> --key otk_...   # (already done if you're reading this)
 cd daily-digest
 cp .env.example .env   # then fill in ORBIO_TREASURER_KEY — skip if you passed --key already
 npm start
 npm run register
 ```
+
+Always pass `--gateway <treasurer-url>` (ask the operator for it) — omitting it leaves
+`ORBIO_TREASURER_URL` at a placeholder that can never resolve.
+
+> **Placeholder gateway.** `--gateway` was not passed, so `ORBIO_TREASURER_URL` above is still the placeholder `https://<REFERENCE_HOST>` — it will never resolve. Replace it with a real Treasurer URL in `.env`/`.env.example`, or re-run `create-orbio-agent --gateway <url>`.
 
 `npm run register` makes this agent show up on the Treasurer's public page within a minute of
 its next call.

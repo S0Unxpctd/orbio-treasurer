@@ -54,6 +54,13 @@ p {
   margin: 0 0 24px;
 }
 
+.how-to-use {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  color: var(--accent);
+  margin: 0 0 12px;
+}
+
 .block {
   background: var(--bg-panel);
   border: 1px solid var(--border);

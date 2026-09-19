@@ -21,11 +21,13 @@
     "probe": "tsx scripts/probe.ts",
     "treasury:read": "pnpm --filter @orbio-treasurer/core treasury:read",
     "treasury:buy": "pnpm --filter @orbio-treasurer/core treasury:buy",
-    "treasury:claim": "pnpm --filter @orbio-treasurer/core treasury:claim"
+    "treasury:claim": "pnpm --filter @orbio-treasurer/core treasury:claim",
+    "seed:agent": "tsx scripts/seed-reference-agent.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@orbio-treasurer/core": "workspace:*",
     "@types/node": "^24.0.0",
     "tsx": "^4.20.0",
     "turbo": "^2.10.12",

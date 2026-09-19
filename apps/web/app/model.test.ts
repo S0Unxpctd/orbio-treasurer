@@ -12,7 +12,17 @@ import type {
 } from '@orbio-treasurer/core';
 import { describe, expect, it } from 'vitest';
 
-import { FOOTER_SENTENCE, type RenderModelInput, renderModel, ZERO_SAVINGS } from './model.js';
+import {
+  FOOTER_SENTENCE,
+  HOW_TO_USE_LINE,
+  PITCH_LINE,
+  PRODUCT_NAME,
+  type RenderModelInput,
+  ROBINHOOD_LINE,
+  renderModel,
+  STATUS_HINT,
+  ZERO_SAVINGS,
+} from './model.js';
 
 const NOW = '2026-09-19T12:00:00.000Z';
 
@@ -291,6 +301,55 @@ describe('renderModel — agents block', () => {
       },
     ]);
     expect(withOne.noAgentsNote).toBeNull();
+  });
+});
+
+describe('renderModel — header block (S-10, tasks/S-10.md "In scope")', () => {
+  it('carries the verbatim PRD §1 pitch line and product name, regardless of agent/data state', () => {
+    const withAgent = renderModel(baseInput());
+    const withoutAgent = renderModel({
+      now: NOW,
+      agent: null,
+      savings24h: ZERO_SAVINGS,
+      savingsAll: ZERO_SAVINGS,
+      burnDailyUsd: '0.010000',
+      chainSnapshot: null,
+      treasuryEvents: [],
+      publicAgents: [],
+    });
+
+    for (const model of [withAgent, withoutAgent]) {
+      expect(model.header.productName).toBe('Orbio Treasurer');
+      expect(model.header.productName).toBe(PRODUCT_NAME);
+      expect(model.header.pitchLine).toBe(PITCH_LINE);
+      expect(model.header.pitchLine).toBe(
+        "One base_url change. Your agents' crons cost less, because we route smarter and " +
+          'source inference below list on Orbio, and you can verify it on-chain.',
+      );
+    }
+  });
+
+  it('the "how to use" one-liner names base_url and model: "auto"', () => {
+    const model = renderModel(baseInput());
+    expect(model.header.howToUse).toBe(HOW_TO_USE_LINE);
+    expect(model.header.howToUse).toContain('base_url');
+    expect(model.header.howToUse).toContain('model: "auto"');
+  });
+
+  it('carries the verbatim Robinhood line', () => {
+    const model = renderModel(baseInput());
+    expect(model.header.robinhoodLine).toBe(ROBINHOOD_LINE);
+    expect(model.header.robinhoodLine).toBe(
+      'Robinhood gave agents a trading account. Orbio Treasurer gives them a treasury that ' +
+        'pays for their inference, on Robinhood Chain, with public proof.',
+    );
+  });
+
+  it('carries the "read the footer" status hint', () => {
+    const model = renderModel(baseInput());
+    expect(model.header.statusHint).toBe(STATUS_HINT);
+    expect(model.header.statusHint).toMatch(/^Status: v1/);
+    expect(model.header.statusHint.toLowerCase()).toContain('footer');
   });
 });
 

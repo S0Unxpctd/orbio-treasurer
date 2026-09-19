@@ -33,6 +33,32 @@ export const FOOTER_SENTENCE =
   'v1: the buy-and-stake leg is funded by seed capital and capped; caller billing is not live. ' +
   'Every on-chain action above links to its transaction.';
 
+// --- header block (S-10, docs/PRD-1.0-sprint.md §1, tasks/S-10.md "In scope") ------------------
+// Static text, not derived from any I/O — kept as named constants (same convention as
+// `FOOTER_SENTENCE` above) so `page.tsx`, `model.test.ts` and anything else that needs the exact
+// wording share one source, never a re-typed copy.
+
+export const PRODUCT_NAME = 'Orbio Treasurer';
+
+/** Verbatim PRD §1 pitch line. */
+export const PITCH_LINE =
+  "One base_url change. Your agents' crons cost less, because we route smarter and source " +
+  'inference below list on Orbio, and you can verify it on-chain.';
+
+/** One-liner "how to use" with the `base_url` + `model: "auto"` snippet (ticket wording: "a
+ *  one-line 'how to use'"). `<this-host>` is a placeholder — the page doesn't know its own
+ *  public URL at render time; the README/kit show the same pattern with a real host. */
+export const HOW_TO_USE_LINE =
+  'Point any OpenAI-compatible client at base_url: "https://<this-host>/v1", model: "auto".';
+
+/** Verbatim, per tasks/S-10.md "In scope". */
+export const ROBINHOOD_LINE =
+  'Robinhood gave agents a trading account. Orbio Treasurer gives them a treasury that pays ' +
+  'for their inference, on Robinhood Chain, with public proof.';
+
+/** Verbatim, per tasks/S-10.md "In scope". */
+export const STATUS_HINT = 'Status: v1 — read the footer.';
+
 export const NO_DATA_NOTE = 'No data yet — this agent has not run a tick.';
 export const NO_PROOF_NOTE = 'No on-chain action yet.';
 export const NO_AGENTS_NOTE = 'No agents yet. Build one: npx create-orbio-agent my-agent';
@@ -207,7 +233,16 @@ export interface ProofRow {
   readonly reason: string | null;
 }
 
+export interface HeaderView {
+  readonly productName: string;
+  readonly pitchLine: string;
+  readonly howToUse: string;
+  readonly robinhoodLine: string;
+  readonly statusHint: string;
+}
+
 export interface RenderModel {
+  readonly header: HeaderView;
   readonly hasAgent: boolean;
   readonly agent: AgentSummary | null;
   readonly savings: {
@@ -346,6 +381,13 @@ function buildProofRow(event: TreasuryEventRow): ProofRow {
 export function renderModel(input: RenderModelInput): RenderModel {
   const hasAgent = input.agent !== null;
   return {
+    header: {
+      productName: PRODUCT_NAME,
+      pitchLine: PITCH_LINE,
+      howToUse: HOW_TO_USE_LINE,
+      robinhoodLine: ROBINHOOD_LINE,
+      statusHint: STATUS_HINT,
+    },
     hasAgent,
     agent: input.agent ? toAgentSummary(input.agent) : null,
     savings: {

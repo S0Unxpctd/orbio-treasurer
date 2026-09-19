@@ -37,11 +37,31 @@ function loadDefaultGatewayUrl() {
   return JSON.parse(raw).gatewayUrl;
 }
 
+/** True for the shipped `defaults.json` placeholder (`https://<REFERENCE_HOST>`) and for any
+ *  other `<...>`-bracketed stand-in a future default might use — never true for a real URL. */
+function isPlaceholderGatewayUrl(url) {
+  return /<[^>]+>/.test(url);
+}
+
+/** S-09 tester finding (tasks/S-09.md Test report): when `--gateway` is omitted, nothing in the
+ *  scaffolded output told the user the default is a stand-in they must replace. Substituted into
+ *  `template/README.md` only — empty string when a real `--gateway` was given, so a scaffold
+ *  produced with an explicit gateway never contains this text or the placeholder token itself. */
+function buildGatewayWarningBlock(gatewayUrl) {
+  if (!isPlaceholderGatewayUrl(gatewayUrl)) return '';
+  return (
+    '\n> **Placeholder gateway.** `--gateway` was not passed, so `ORBIO_TREASURER_URL` above is ' +
+    `still the placeholder \`${gatewayUrl}\` — it will never resolve. Replace it with a real ` +
+    'Treasurer URL in `.env`/`.env.example`, or re-run `create-orbio-agent --gateway <url>`.\n'
+  );
+}
+
 /**
- * Recursively copies `srcDir` into `destDir`, substituting `__AGENT_NAME__`/`__GATEWAY_URL__` in
- * every file's text content. Deliberately does not know about a key/secret at all — the
- * template ships no `__AGENT_KEY__`-shaped token, so there is no code path here that could ever
- * write a real key into a copied (and possibly committed) template file (AC7).
+ * Recursively copies `srcDir` into `destDir`, substituting `__AGENT_NAME__`/`__GATEWAY_URL__`/
+ * `__GATEWAYWARNING__` in every file's text content. Deliberately does not know about a
+ * key/secret at all — the template ships no `__AGENT_KEY__`-shaped token, so there is no code
+ * path here that could ever write a real key into a copied (and possibly committed) template
+ * file (AC7).
  */
 function scaffold(srcDir, destDir, vars) {
   mkdirSync(destDir, { recursive: true });
@@ -55,7 +75,8 @@ function scaffold(srcDir, destDir, vars) {
     const raw = readFileSync(srcPath, 'utf8');
     const text = raw
       .replaceAll('__AGENT_NAME__', vars.name)
-      .replaceAll('__GATEWAY_URL__', vars.gatewayUrl);
+      .replaceAll('__GATEWAY_URL__', vars.gatewayUrl)
+      .replaceAll('__GATEWAYWARNING__', vars.gatewayWarning);
     writeFileSync(destPath, text, 'utf8');
   }
 }
@@ -108,8 +129,13 @@ function main(argv) {
 
   const gatewayUrl = parsed.values.gateway ?? loadDefaultGatewayUrl();
   const key = parsed.values.key ?? '';
+  const usingPlaceholderGateway = isPlaceholderGatewayUrl(gatewayUrl);
 
-  scaffold(TEMPLATE_DIR, targetDir, { name, gatewayUrl });
+  scaffold(TEMPLATE_DIR, targetDir, {
+    name,
+    gatewayUrl,
+    gatewayWarning: buildGatewayWarningBlock(gatewayUrl),
+  });
 
   // `.env.example` (just copied above) never carries a real key — see scaffold()'s comment. A
   // real `.env` is written here, separately, and only when a key was actually given: it's the
@@ -125,6 +151,14 @@ function main(argv) {
 
   console.log(`Created ${name}/`);
   console.log('');
+  if (usingPlaceholderGateway) {
+    console.log(
+      `WARNING: no --gateway was passed, so ORBIO_TREASURER_URL is still the placeholder ` +
+        `"${gatewayUrl}" — it will never resolve. Pass --gateway <url> next time, or edit ` +
+        `.env/.env.example yourself. See ${name}/README.md.`,
+    );
+    console.log('');
+  }
   console.log('Next steps:');
   console.log(`  cd ${name}`);
   if (!key) {
