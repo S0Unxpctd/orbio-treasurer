@@ -2,6 +2,19 @@
 
 Updated every evening by So after the merge. The judges may read this; keep it factual.
 
+## Sprint 1.0 — Day 12, 2026-09-20 (submission day)
+
+- Shipped: S-10 (this entry, README/landing copy/DEPLOY/SUBMISSION/LOOM-script/seed script),
+  [T-xxx, T-yyy — fill in what else merged today].
+- Blocked: [exact question, or "none"].
+- Reference agent: uptime [X]h, ticks last 24h [N]/96, mode [normal/eco/critical], last decision
+  [claim_activate/buy/stakeup/none at HH:MM].
+- Treasury: staked [X] ORBIO, CREDIT claimed [X] / activated [X], USDG spent on the book [X],
+  ORBIO bought [X] (all-time, live only — dry-run numbers don't count here).
+- Agents on the page: [N] (external: [N]).
+- Budget spent: $[X] / $100.
+- Submission: repo [link], live page [link], Loom [link] — `docs/SUBMISSION.md` filled and sent.
+
 ## Sprint 1.0 — Day 11, 2026-09-19 (00:30 → 06:30 Paris)
 
 - Pivot ratified (PRD 1.0 sprint edition, docs/PRD-1.0-sprint.md): Orbio Treasurer = a routing gateway other agents call (`base_url` + `model:"auto"`) that sources inference below list on Orbio and stakes ORBIO on volume; public proof page; kit. Old MCP client frozen.
