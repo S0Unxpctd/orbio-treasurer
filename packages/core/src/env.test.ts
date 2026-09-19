@@ -145,3 +145,79 @@ describe('loadEnv — missing required vars are named, never valued', () => {
     expect((error as EnvValidationError).missing).toEqual(['LEDGER']);
   });
 });
+
+// S-03: treasury read + wallet-signed key (tasks/S-03.md, docs/PRD-1.0-sprint.md §3/§4 T-3)
+describe('loadEnv — S-03 chain vars', () => {
+  it('defaults RH_RPC_URLS to the publicnode -> ordofi order and leaves the 7 address vars unset', () => {
+    const env = loadEnv({});
+    expect(env.RH_RPC_URLS).toBe('https://robinhood-rpc.publicnode.com,https://rpc.ordofi.network');
+    expect(env.CREDIT_ADDRESS).toBeUndefined();
+    expect(env.STAKING_ADDRESS).toBeUndefined();
+    expect(env.EXCHANGE_ADDRESS).toBeUndefined();
+    expect(env.ORBIO_ADDRESS).toBeUndefined();
+    expect(env.USDG_ADDRESS).toBeUndefined();
+    expect(env.NVDA_ADDRESS).toBeUndefined();
+    expect(env.PAYOUT_ADDRESS).toBeUndefined();
+    expect(env.TREASURER_PRIVATE_KEY).toBeUndefined();
+    expect(env.STAKER_ADDRESS).toBeUndefined();
+    expect(env.STAKER_PRIVATE_KEY).toBeUndefined();
+  });
+
+  it('boots fine with none of the S-03 vars set (chain features are opt-in)', () => {
+    expect(() => loadEnv({})).not.toThrow();
+  });
+
+  it('parses an explicit RH_RPC_URLS override', () => {
+    const env = loadEnv({ RH_RPC_URLS: 'https://a.example/rpc,https://b.example/rpc' });
+    expect(env.RH_RPC_URLS).toBe('https://a.example/rpc,https://b.example/rpc');
+  });
+
+  it('accepts a well-formed TREASURER_PRIVATE_KEY / STAKER_PRIVATE_KEY (0x + 64 hex)', () => {
+    const pk = `0x${'ab'.repeat(32)}`;
+    const env = loadEnv({ TREASURER_PRIVATE_KEY: pk, STAKER_PRIVATE_KEY: pk });
+    expect(env.TREASURER_PRIVATE_KEY).toBe(pk);
+    expect(env.STAKER_PRIVATE_KEY).toBe(pk);
+  });
+
+  it('rejects a malformed TREASURER_PRIVATE_KEY by name only, never the value', () => {
+    let error: unknown;
+    try {
+      loadEnv({ TREASURER_PRIVATE_KEY: 'not-a-key' });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(EnvValidationError);
+    expect((error as EnvValidationError).missing).toEqual(['TREASURER_PRIVATE_KEY']);
+    expect((error as EnvValidationError).message).not.toContain('not-a-key');
+  });
+
+  it('rejects a malformed STAKER_ADDRESS (must be 0x + 40 hex, not 64)', () => {
+    let error: unknown;
+    try {
+      loadEnv({ STAKER_ADDRESS: `0x${'ab'.repeat(32)}` });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(EnvValidationError);
+    expect((error as EnvValidationError).missing).toEqual(['STAKER_ADDRESS']);
+  });
+
+  it('accepts a well-formed STAKER_ADDRESS', () => {
+    const addr = `0x${'ab'.repeat(20)}`;
+    expect(loadEnv({ STAKER_ADDRESS: addr }).STAKER_ADDRESS).toBe(addr);
+  });
+
+  it('the 7 chain address vars pass through as opaque strings (checksum validated in chain/contracts.ts, not here)', () => {
+    const env = loadEnv({
+      CREDIT_ADDRESS: '0xe33322da1380e61e5ae5dfb21e7f62924c73004c',
+      STAKING_ADDRESS: '0xe0710011278bfb63e57c5f227e5980984b1eddca',
+      EXCHANGE_ADDRESS: '0x6951ffd32630b05e06f50062aea801625a58ebc0',
+      ORBIO_ADDRESS: '0xaa07a0e9209e16ac99708c3ec70159c6ef3128a3',
+      USDG_ADDRESS: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
+      NVDA_ADDRESS: '0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC',
+      PAYOUT_ADDRESS: '0x4cbbbf652b11ed1294df0ac49d8322394310cfc5',
+    });
+    expect(env.CREDIT_ADDRESS).toBe('0xe33322da1380e61e5ae5dfb21e7f62924c73004c');
+    expect(env.USDG_ADDRESS).toBe('0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168');
+  });
+});
