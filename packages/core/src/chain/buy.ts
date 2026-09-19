@@ -543,6 +543,19 @@ export interface BuyCreditDeps {
    *  the UTC-day buy count. Default 200 — see Discovered in tasks/S-05.md for why this isn't an
    *  indexed lookup. */
   readonly eventLookback?: number;
+  /** S-06 discovery (tasks/S-06.md Discovered): `tick/tick.ts` already runs the ENTIRE tick
+   *  (every read, `decide()`, and every executor call) inside one
+   *  `store.withAgentLock(agentId, ...)` for this same `agentId`. `LedgerStore.withAgentLock`'s
+   *  SQLite implementation is a per-`agentId` FIFO promise chain (`ledger/sqlite/store.ts`) — a
+   *  SECOND call for the same `agentId` is queued strictly BEHIND the first and only starts once
+   *  it settles. Without this flag, `buyCredit()` calling `store.withAgentLock(deps.agentId, ...)`
+   *  from inside the tick's own lock body deadlocks forever (the tick's call can't settle until
+   *  buyCredit's nested call does, and buyCredit's call can't even START until the tick's settles).
+   *  Set `true` only by a caller that already holds this agent's lock for the whole duration of
+   *  this call (today: `tick/executors.ts`'s `runBuy()`, only). Every other caller (the CLI,
+   *  `buy.test.ts`) leaves this unset/`false` and keeps buyCredit's own locking exactly as S-05
+   *  built it — this is additive, not a behavior change for any existing caller. */
+  readonly skipOwnLock?: boolean;
 }
 
 export type BuyCreditResult =
@@ -600,6 +613,7 @@ function serializePlan(plan: BuyPlan): Record<string, unknown> {
  * per-dialect guarantee).
  */
 export async function buyCredit(deps: BuyCreditDeps): Promise<BuyCreditResult> {
+  if (deps.skipOwnLock) return buyCreditLocked(deps);
   return deps.store.withAgentLock(deps.agentId, () => buyCreditLocked(deps));
 }
 

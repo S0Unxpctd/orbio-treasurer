@@ -366,4 +366,26 @@ describe('buyCredit — ledger rows (S-05 AC3, AC4)', () => {
     )?.[0];
     expect(buyCall.maxFeePerGas).toBeLessThanOrEqual(BigInt(DEFAULT_MAX_FEE_GWEI) * 1_000_000_000n);
   });
+
+  it("S-06 discovery/regression: skipOwnLock=true lets buyCredit() run from INSIDE the caller's " +
+    'own store.withAgentLock() for the same agent, without deadlocking (default/unset would hang ' +
+    "forever — SQLite's per-agentId FIFO chain never lets a second call for the same agent start " +
+    'before the first settles, and the first here never settles until buyCredit() itself returns)', async () => {
+    const agentId = await seedAgent();
+    const { client } = fakeClient({});
+    const result = await store.withAgentLock(agentId, () =>
+      buyCredit({
+        store,
+        agentId,
+        client,
+        addresses: ADDRESSES,
+        hot: HOT,
+        usdgIn: 10_000_000n,
+        caps: dryCaps(),
+        idempotencyKey: 'tick-skip-lock',
+        skipOwnLock: true,
+      }),
+    );
+    expect(result.status).toBe('dry_run');
+  }, 2000); // generous but finite — a regression here should hang past this, not merely run slow
 });
