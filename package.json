@@ -17,7 +17,8 @@
     "smoke": "pnpm --filter @orbio-treasurer/web smoke",
     "db:migrate": "supabase db push",
     "tick": "pnpm --filter @orbio-treasurer/book-daily tick",
-    "probe": "tsx scripts/probe.ts"
+    "probe": "tsx scripts/probe.ts",
+    "treasury:read": "pnpm --filter @orbio-treasurer/core treasury:read"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
