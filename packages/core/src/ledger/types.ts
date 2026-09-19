@@ -464,6 +464,23 @@ export interface LedgerStore {
   insertChainSnapshot(row: NewChainSnapshot): Promise<ChainSnapshotRow>;
   latestChainSnapshot(agentId: Id): Promise<ChainSnapshotRow | null>;
 
+  /**
+   * Runs `fn` with an exclusive lock scoped to `agentId` — the primitive that closes S-05's
+   * audit Major ("buyCredit()'s idempotency + day-cap check is check-then-act, not atomic"):
+   * a caller does its idempotency lookup, `planBuy()`'s day-cap check, its ledger writes, and
+   * (for a live buy) the on-chain send, all inside one `withAgentLock` call, so two concurrent
+   * calls for the SAME agent can never both observe the pre-write state and both act on it.
+   *
+   * The exact guarantee differs by dialect — see each implementation's own doc comment for the
+   * details — but every implementation guarantees AT LEAST: (a) two concurrent calls sharing an
+   * `agentId` never run their `fn` bodies concurrently (real, observable serialization — the
+   * second one's `fn` starts only after the first one's `fn` has settled), and (b) a call for
+   * one `agentId` is never made to wait on a call for a *different* `agentId` for the sake of
+   * this lock. Rejects (never resolves the wrong result) if `fn` throws — the lock is released
+   * either way.
+   */
+  withAgentLock<T>(agentId: Id, fn: () => Promise<T>): Promise<T>;
+
   /** Releases the underlying connection/handle. Safe to call more than once. */
   close(): Promise<void>;
 }
