@@ -40,7 +40,12 @@ export type TreasuryEventKind =
   | 'stake'
   | 'mode_change'
   | 'alert'
-  | 'dry_run';
+  | 'dry_run'
+  /** S-06: `tick/tick.ts`'s own idempotency marker — one per 15-min UTC bucket per agent, never
+   *  anything else. Added to the CHECK constraint by `supabase/migrations/006_tick_marker_and_cron.sql`
+   *  (both dialects) rather than requiring a fresh `005`-style hand-written delta rewrite of an
+   *  already-applied constraint. */
+  | 'tick';
 export type TreasuryEventToken = 'CREDIT' | 'ORBIO' | 'USDG' | 'ETH';
 
 // --- agents ---------------------------------------------------------------------------------
