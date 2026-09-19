@@ -414,7 +414,20 @@ export async function discoverLatestPeriodId(
     // The hint itself doesn't exist (too high, or stale) — walk down to find a real floor
     // rather than assuming no periods exist at all from one miss.
     let probe = low - 1n;
-    let found: bigint | null = null;
+    // Sentinel is `-1n`, not `null` (build note, S-06 [S-06]): a `let found: bigint | null =
+    // null` here — reassigned to a bigint inside the loop below, then fed into `low + 1n` after
+    // the loop — is exactly the shape `@vercel/nft`'s output-file-tracing static evaluator
+    // mis-resolves: it reads `found`'s DECLARATION value (`null`), not its later reassignment,
+    // so `low = found` becomes `null` in its eyes and the next `low + 1n` throws "Cannot mix
+    // BigInt and other types" — a real crash in `next build --webpack`'s trace step, not a type
+    // error (`bigint | null` was always sound; nft's evaluator doesn't run the code, it just
+    // walks the AST for static values and picked the wrong one). `-1n` is never a real period id
+    // (ids start at 1, PRD §3/docs/api-notes.md's "S-04 period discovery" probe), so this sentinel
+    // changes nothing about what this function returns for any real input — every branch below
+    // resolves through a bigint-typed identifier end to end, so nft's evaluator can no longer land
+    // on a null-mixed-with-bigint expression. See docs/runbook.md "Build: nft static evaluation
+    // and bigint constants".
+    let found = -1n;
     while (probe >= 1n) {
       if (await exists(probe)) {
         found = probe;
@@ -422,7 +435,7 @@ export async function discoverLatestPeriodId(
       }
       probe -= 1n;
     }
-    if (found === null) return null;
+    if (found === -1n) return null;
     low = found;
   }
 
