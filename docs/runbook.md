@@ -39,6 +39,44 @@ curl -s "$SITE/v1/chat/completions" \
 # response headers include x-treasurer-model / -tier / -reason / -cost-usd / -baseline-usd
 ```
 
+## Chain 4663 read (S-03) — addresses, RPCs, quick CLI
+
+Every address below is PRD §3, live-verified 2026-09-19 (docs/api-notes.md "S-03 chain reads").
+They live in env (`.env.example`), never as literals in source (CLAUDE.md #5) — `chain/contracts.ts`'s
+`loadChainAddresses()` reads and checksum-validates all 7 at once.
+
+| Var | Address | What |
+|---|---|---|
+| `CREDIT_ADDRESS` | `0xe33322da1380e61e5ae5dfb21e7f62924c73004c` | CREDIT (ERC-20, 6 dec, 1 CREDIT = $1 inference) |
+| `STAKING_ADDRESS` | `0xe0710011278bfb63e57c5f227e5980984b1eddca` | Staking (ABI hand-written, unpublished — `packages/core/abi/staking.json`) |
+| `EXCHANGE_ADDRESS` | `0x6951ffd32630b05e06f50062aea801625a58ebc0` | Exchange (getQuote/buy/buyAndActivate) |
+| `PAYOUT_ADDRESS` | `0x4cbbbf652b11ed1294df0ac49d8322394310cfc5` | Payout |
+| `ORBIO_ADDRESS` | `0xaa07a0e9209e16ac99708c3ec70159c6ef3128a3` | $ORBIO (18 dec) |
+| `USDG_ADDRESS` | `0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` | USDG (6 dec, EIP-3009). **Discovered**: the PRD doc's own printed casing for this address is not a valid EIP-55 checksum (one char wrong) — the value here is the correct checksum; `getAddress()` accepts either input casing and always resolves to this one. |
+| `NVDA_ADDRESS` | `0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC` | Tokenized NVIDIA stock (Uniswap v4 pool pair for ORBIO, T-7) |
+
+RPC fallback (`RH_RPC_URLS`, comma-separated, ordered): `https://robinhood-rpc.publicnode.com`
+first, `https://rpc.ordofi.network` second — both confirmed live 2026-09-19, no rate limit hit.
+The official `https://rpc.mainnet.chain.robinhood.com` is deliberately not in the default list
+(PRD §3: 429s after 2-3 calls). Multicall3 (standard CREATE2 address
+`0xca11bde05977b3631167028862be2a173976ca11`) IS deployed on 4663 — `readTreasury()` batches
+all 9 non-ETH reads through it and only falls back to sequential reads if the multicall call
+itself fails.
+
+```
+pnpm treasury:read
+```
+
+Prints the current snapshot (staked ORBIO, settled/claimable CREDIT, CREDIT/USDG/ETH wallet
+balances, the live 10-USDG book quote, staking totals, and — if `ORBIO_GATEWAY_BASE_URL` and
+either `TREASURER_PRIVATE_KEY` or `ORBIO_KEY` are set — the gateway's `/key` balance) as one
+redacted JSON object, addresses shortened. Read-only; never sends a transaction.
+
+`TREASURER_PRIVATE_KEY` (and `STAKER_PRIVATE_KEY`, once So confirms the staking wallet is
+dedicated — PRD §9 Q1) are the only S-03 secrets; both are 0x + 64-hex, validated by `env.ts` at
+boot (name-only errors, CLAUDE.md #4), never logged (`redact()` masks both the raw hex shape and
+the `sk-orb-...` key `deriveOrbioKey()` derives from it).
+
 ## Rollback
 
 Set `TREASURER_LIVE=false` → redeploy. The ledger is append-only; nothing to restore. Open buy orders (L2b) are resolved by Orbio; note their ids in the incident entry.
