@@ -77,6 +77,44 @@ dedicated — PRD §9 Q1) are the only S-03 secrets; both are 0x + 64-hex, valid
 boot (name-only errors, CLAUDE.md #4), never logged (`redact()` masks both the raw hex shape and
 the `sk-orb-...` key `deriveOrbioKey()` derives from it).
 
+## Tick loop (S-06) — deploy, keys, local dry-run
+
+Migration `006_tick_marker_and_cron.sql` adds `'tick'` to `treasury_events.kind`'s CHECK and
+re-points the existing `treasurer-tick` cron job (004) at `POST /api/tick` with header
+`x-tick-secret` (replacing the older `/api/cron/tick` + `x-cron-secret` pair above, which this
+ticket's route does not implement — `app/api/tick/route.ts` is the only tick endpoint now).
+`pg_cron`/`pg_net` are not installed in this sandbox, so the cron statement is checked for syntax
+only here (`packages/core/src/ledger/migration-006.test.ts`); it only takes effect once applied
+against the hosted Supabase project.
+
+1. `pnpm db:migrate` (applies 006; safe to re-run — every statement in it is idempotent, AC7).
+2. Set `TICK_SECRET` in Vercel (Production + Preview) to a fresh random value — this is the
+   value `x-tick-secret` must equal; unset or mismatched → every `POST /api/tick` 401s.
+3. On the Supabase project, once, as the project owner (not from this sandbox — `pg_cron`/`pg_net`
+   aren't installed here):
+   ```sql
+   alter database postgres set app.tick_url = 'https://<production-domain>/api/tick';
+   alter database postgres set app.tick_secret = '<same value as Vercel TICK_SECRET>';
+   ```
+   Confirm with `select * from cron.job where jobname = 'treasurer-tick';` — the command should
+   reference `app.tick_url`/`app.tick_secret` (migration 006's body), running every 15 min.
+4. Smoke-test by hand once: `curl -X POST -H "x-tick-secret: $TICK_SECRET" $SITE/api/tick` → 200
+   + a JSON summary (bucket, mode, previousMode, modeChanged, action counts — no secrets, AC8).
+5. `REFERENCE_AGENT_SLUG` (default `treasurer`) is both the agent `runTick()` ticks and the agent
+   whose `chain_snapshots.mode` the gateway's router reads (`app/v1/_gateway.ts`, 60 s cache) — only
+   set it if you renamed that agent. `TREASURER_MODE`, if set, always overrides the ledger-derived
+   mode (tests/manual override only — leave it unset in normal operation).
+
+Local dry-run, no route/cron needed: `pnpm tick` runs one tick against `LEDGER_SQLITE_PATH`'s
+agent (`REFERENCE_AGENT_SLUG`), prints the redacted summary, never sends a transaction
+(`TREASURER_LIVE` must already be `false`/unset — the CLI itself has no `--live` flag and cannot
+flip it).
+
+Caller keys backed by the ledger (S-02's `caller_keys` table, checked before the `GATEWAY_KEYS`
+env fallback): `pnpm keys:create --label <x> [--agent <slug>]` inserts a new `otk_<32 hex>` key
+and prints the raw value exactly once — copy it immediately, it is not stored anywhere in
+readable form afterward (only its hash and `key_prefix`/`key_last4`).
+
 ## Rollback
 
 Set `TREASURER_LIVE=false` → redeploy. The ledger is append-only; nothing to restore. Open buy orders (L2b) are resolved by Orbio; note their ids in the incident entry.
