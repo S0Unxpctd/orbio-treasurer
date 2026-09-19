@@ -422,3 +422,55 @@ describe('redact() — other non-plain values (belt and braces)', () => {
     expect(redact(Symbol('x'))).toBe('<fn>');
   });
 });
+
+describe('redact() — S-05 additions (buyCredit()/executeBuy() never leak a private key)', () => {
+  // AC6: "No private key material in any log, error, event meta or CLI output (redact test +
+  // grep)." No new pattern is needed for S-05 — TREASURER_PRIVATE_KEY (sensitiveKeyName) and the
+  // bare 0x+64-hex shape (privateKeyHex) were both already covered by S-03's additions above.
+  // These tests exercise that existing coverage against the specific shapes S-05's code could
+  // plausibly try to log: a would-be CLI/tick log line carrying `env`, and an error thrown out
+  // of `executeBuy()` whose `cause` wraps a value derived from the key.
+
+  it('masks TREASURER_PRIVATE_KEY inside a buyCredit()-shaped log line, even nested under env', () => {
+    const logLine = {
+      event: 'buyCredit',
+      idempotencyKey: 'tick-2026-09-19T12',
+      env: { TREASURER_PRIVATE_KEY: HARDHAT_PK, TREASURER_LIVE: true },
+      plan: { usdgIn: '10000000', minCreditOut: '13066665' },
+    };
+    const out = redact(logLine) as { env: { TREASURER_PRIVATE_KEY: unknown } };
+    expect(out.env.TREASURER_PRIVATE_KEY).not.toBe(HARDHAT_PK);
+    expect(JSON.stringify(out)).not.toContain(HARDHAT_PK.slice(2, -4));
+  });
+
+  it("masks a bare 0x+64-hex private key even when it is the CLI's own printed value, unlabelled", () => {
+    // executeBuy()/the CLI never has a reason to print the raw key, but if a bug ever put one
+    // straight into a string (no _KEY-suffixed wrapper), the generic 0x+64-hex rule still
+    // catches it — same "fail closed" rule the file header documents for tx hashes.
+    const out = redact(`refusing to send: signer for ${HARDHAT_PK} has insufficient gas`) as string;
+    expect(out).not.toContain(HARDHAT_PK);
+  });
+
+  it('masks a private key surfaced through an Error thrown by executeBuy()-shaped code, including its cause chain', () => {
+    const cause = new Error(`account derivation failed for key ${HARDHAT_PK}`);
+    const err = new Error('executeBuy: buyAndActivate reverted', { cause });
+    const out = redact(err) as { message: string; cause?: { message: string } };
+    expect(out.message).not.toContain(HARDHAT_PK);
+    expect(out.cause?.message).not.toContain(HARDHAT_PK);
+  });
+
+  it('a treasury_events-shaped dry_run row (meta.reason/meta.detail/meta.plan) never contains the key even if a caller mistakenly nested it', () => {
+    // Belt-and-braces: buyCredit() itself never puts an account/key into meta (see buy.ts), but
+    // redact() must still fail closed if it ever were nested this way.
+    const row = {
+      kind: 'dry_run',
+      meta: {
+        reason: 'insufficient_gas_balance',
+        detail: 'hot wallet ETH balance is low',
+        account: { privateKey: HARDHAT_PK },
+      },
+    };
+    const out = redact(row) as { meta: { account: { privateKey: unknown } } };
+    expect(out.meta.account.privateKey).not.toBe(HARDHAT_PK);
+  });
+});

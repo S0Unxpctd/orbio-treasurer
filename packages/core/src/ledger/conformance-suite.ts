@@ -606,5 +606,84 @@ export function defineLedgerConformanceSuite(
         store.insertChainSnapshot({ agentId: randomUUID(), asOf: new Date().toISOString() }),
       ).rejects.toThrow();
     });
+
+    // --- withAgentLock (S-05 audit fix) -----------------------------------------------------
+
+    function sleep(ms: number): Promise<void> {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    it('withAgentLock: two concurrent calls on the SAME agent serialize — the second never starts until the first settles (observable ordering)', async () => {
+      const agentId = uniqueSlug('lock-same');
+      const events: string[] = [];
+
+      const callA = store.withAgentLock(agentId, async () => {
+        events.push('a-start');
+        await sleep(30);
+        events.push('a-end');
+        return 'a';
+      });
+      // Give callA a chance to actually enter `fn` before callB is issued, so a passing test
+      // can't be an accident of scheduling order rather than the lock.
+      await sleep(5);
+      const callB = store.withAgentLock(agentId, async () => {
+        events.push('b-start');
+        await sleep(5);
+        events.push('b-end');
+        return 'b';
+      });
+
+      const [resultA, resultB] = await Promise.all([callA, callB]);
+      expect(resultA).toBe('a');
+      expect(resultB).toBe('b');
+      // b-start must come after a-end — never interleaved with A's critical section.
+      expect(events).toEqual(['a-start', 'a-end', 'b-start', 'b-end']);
+    });
+
+    it("withAgentLock: a call for a DIFFERENT agent is never made to wait on another agent's lock", async () => {
+      const agentSlow = uniqueSlug('lock-slow');
+      const agentFast = uniqueSlug('lock-fast');
+      const events: string[] = [];
+
+      const slow = store.withAgentLock(agentSlow, async () => {
+        events.push('slow-start');
+        await sleep(60);
+        events.push('slow-end');
+        return 'slow';
+      });
+      await sleep(5); // let `slow` actually enter its critical section first
+      const fast = store.withAgentLock(agentFast, async () => {
+        events.push('fast-start');
+        events.push('fast-end');
+        return 'fast';
+      });
+
+      const [slowResult, fastResult] = await Promise.all([slow, fast]);
+      expect(slowResult).toBe('slow');
+      expect(fastResult).toBe('fast');
+      // The fast, different-agent call fully finishes before the slow one does — it was not
+      // queued behind it.
+      const fastEndIndex = events.indexOf('fast-end');
+      const slowEndIndex = events.indexOf('slow-end');
+      expect(fastEndIndex).toBeLessThan(slowEndIndex);
+    });
+
+    it('withAgentLock: the lock is released after fn throws, so a later call for the same agent still runs', async () => {
+      const agentId = uniqueSlug('lock-throw');
+      await expect(
+        store.withAgentLock(agentId, async () => {
+          throw new Error('boom');
+        }),
+      ).rejects.toThrow('boom');
+
+      const result = await store.withAgentLock(agentId, async () => 'ok-after-throw');
+      expect(result).toBe('ok-after-throw');
+    });
+
+    it('withAgentLock: the value fn resolves with is returned as-is', async () => {
+      const agentId = uniqueSlug('lock-return');
+      const result = await store.withAgentLock(agentId, async () => ({ n: 42 }));
+      expect(result).toEqual({ n: 42 });
+    });
   });
 }

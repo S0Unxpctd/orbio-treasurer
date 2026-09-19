@@ -579,6 +579,30 @@ export class PostgresLedgerStore implements LedgerStore {
     return rows[0] ? mapChainSnapshotRow(rows[0] as Row) : null;
   }
 
+  // --- withAgentLock (S-05 audit fix) ---
+
+  /**
+   * A real, per-agent Postgres transaction-scoped advisory lock: `fn` runs inside a
+   * transaction (`this.sql.begin`) that first takes `pg_advisory_xact_lock(hashtext(agentId))`.
+   * Guarantee: any other call — in this process or another one entirely, on another connection
+   * or another machine talking to the same database — that requests the SAME `agentId`'s lock
+   * blocks at the `pg_advisory_xact_lock` call until this transaction commits or rolls back
+   * (Postgres releases a `_xact_lock` automatically at transaction end, so there is no separate
+   * unlock step and no way to leak the lock on a crash). A call for a DIFFERENT `agentId` hashes
+   * to a different lock key and never waits on this one at all — true per-agent, not
+   * whole-database, concurrency (the guarantee SQLite's single-writer model can't give; see
+   * sqlite/store.ts's own comment on `withAgentLock` for that dialect's coarser fallback).
+   * `hashtext` collisions across two different agent ids are possible in principle (32-bit hash)
+   * but only make the lock *stricter* than intended (two unrelated agents briefly serialize) —
+   * never weaker — so this is safe even in that rare case.
+   */
+  async withAgentLock<T>(agentId: Id, fn: () => Promise<T>): Promise<T> {
+    return this.sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${agentId}))`;
+      return fn();
+    }) as Promise<T>;
+  }
+
   async close(): Promise<void> {
     await this.sql.end();
   }

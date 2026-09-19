@@ -91,6 +91,24 @@ const baseSchema = z.object({
     .regex(/^0x[0-9a-fA-F]{64}$/, 'expected a 0x-prefixed 64-hex private key')
     .optional(),
 
+  // --- S-05: buyAndActivate gates (docs/PRD-1.0-sprint.md §4 T-5, §6; tasks/S-05.md "In scope") ---
+  // `BUY_MAX_USDG_PER_TX`/`BUY_MAX_PER_DAY` may only LOWER `policy/defaults.ts`'s constants of
+  // the same name — `chain/buy.ts`'s `resolveBuyCaps()` enforces that and warns (never throws)
+  // if a value here would raise one instead (CLAUDE.md rule 5). Decimal strings, not floats —
+  // parsed with `ledger/decimal.ts`'s exact bigint arithmetic, same as every other money field.
+  BUY_MAX_USDG_PER_TX: optionalString,
+  BUY_MAX_PER_DAY: optionalString,
+  // `executeBuy()`'s `maxFeePerGas` cap (gwei) and `planBuy()`'s minimum hot-wallet ETH balance
+  // (ETH) — both directionality-restricted (S-05 audit pass 1, Minor/Question 2), each toward
+  // whichever direction is safer for what it is: `MAX_FEE_GWEI` is a ceiling, so env may only
+  // LOWER it; `MIN_GAS_ETH` is a floor, so env may only RAISE it. A value that would move either
+  // the unsafe way is ignored and logged, never thrown — see chain/buy.ts's
+  // `resolveMaxFeeGweiCap()`/`resolveBuyCaps()`. Defaults live in chain/buy.ts
+  // (`DEFAULT_MAX_FEE_GWEI`, `DEFAULT_MIN_GAS_ETH`), not here, to match `RH_RPC_URLS`'s pattern
+  // above.
+  MAX_FEE_GWEI: optionalString,
+  MIN_GAS_ETH: optionalString,
+
   // --- S-01: gateway + router (docs/PRD-1.0-sprint.md §4 T-1) ---
   // Comma-separated `otk_<32 hex>` values, hashed with sha256 at boot (router/keys.ts). Optional
   // at the env-schema level (CLAUDE.md #5c: the kit never *requires* this) — a gateway deployment

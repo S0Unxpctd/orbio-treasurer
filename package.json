@@ -18,7 +18,8 @@
     "db:migrate": "supabase db push",
     "tick": "pnpm --filter @orbio-treasurer/book-daily tick",
     "probe": "tsx scripts/probe.ts",
-    "treasury:read": "pnpm --filter @orbio-treasurer/core treasury:read"
+    "treasury:read": "pnpm --filter @orbio-treasurer/core treasury:read",
+    "treasury:buy": "pnpm --filter @orbio-treasurer/core treasury:buy"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",
