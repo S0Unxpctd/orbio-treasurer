@@ -324,6 +324,13 @@ export class PostgresLedgerStore implements LedgerStore {
     return mapAgentRow(dbRow);
   }
 
+  async listPublicAgents(): Promise<AgentRow[]> {
+    const rows = await this.sql`
+      select * from agents where public = true order by created_at desc
+    `;
+    return (rows as Row[]).map(mapAgentRow);
+  }
+
   // --- key_meta ---
 
   async insertKeyMeta(row: NewKeyMeta): Promise<KeyMetaRow> {

@@ -108,6 +108,12 @@ const baseSchema = z.object({
   CRON_SECRET: optionalString,
   NEXT_PUBLIC_SITE_URL: optionalString,
 
+  // --- S-08: public page + /api/stats + /api/agents (docs/PRD-1.0-sprint.md §4 T-8) ---
+  // Which `agents` row the public page/API treat as "the" reference Treasurer. Defaults to
+  // 'treasurer' per the ticket; unset is fine even in the kit (S-08 AC1: an unknown slug just
+  // renders zeros + "no data yet", never a crash).
+  REFERENCE_AGENT_SLUG: z.string().min(1).default('treasurer'),
+
   // --- book-daily ---
   X_API_KEY: optionalString,
   X_API_SECRET: optionalString,

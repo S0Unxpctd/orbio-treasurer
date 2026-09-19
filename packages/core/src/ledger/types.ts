@@ -424,6 +424,13 @@ export interface LedgerStore {
   getAgentBySlug(slug: string): Promise<AgentRow | null>;
   /** Throws NotFoundError if `id` doesn't exist. Rejects an empty patch. */
   updateAgent(id: Id, patch: AgentMutablePatch): Promise<AgentRow>;
+  /**
+   * S-08: `agents` rows with `public = true`, most recently created first. Necessary
+   * infrastructure for the public page's Agents block (not itself an S-02/S-03 acceptance
+   * criterion — same footnote as `listUsageEvents` above) — a private agent must never appear
+   * in this list's results.
+   */
+  listPublicAgents(): Promise<AgentRow[]>;
 
   insertKeyMeta(row: NewKeyMeta): Promise<KeyMetaRow>;
 

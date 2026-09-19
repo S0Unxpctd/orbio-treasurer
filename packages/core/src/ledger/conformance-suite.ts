@@ -100,6 +100,18 @@ export function defineLedgerConformanceSuite(
       );
     });
 
+    it('agents: listPublicAgents returns only public = true rows (S-08)', async () => {
+      const pub = await seedAgent({ name: 'Public One', public: true });
+      await seedAgent({ name: 'Private One', public: false });
+
+      const rows = await store.listPublicAgents();
+      const ids = rows.map((r) => r.id);
+      expect(ids).toContain(pub.id);
+      for (const row of rows) {
+        expect(row.public).toBe(true);
+      }
+    });
+
     it('key_meta: insertKeyMeta round-trips; revocation is a new row, not an update (FR-1.1)', async () => {
       const agent = await seedAgent();
       const created = await store.insertKeyMeta({
