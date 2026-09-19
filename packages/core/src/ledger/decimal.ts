@@ -86,6 +86,25 @@ export function maxDecimal(a: ScaledDecimal, b: ScaledDecimal): ScaledDecimal {
 }
 
 /**
+ * Multiplies two `ScaledDecimal`s (S-06, tasks/S-06.md Discovered: `sprint.ts`'s buy-sizing
+ * formula needs `RUNWAY_BUY_DAYS × burnDaily`, a decimal-by-decimal product this module didn't
+ * have yet — `addDecimal`/`subDecimal` are the identity-scaled ops, but a product of two values
+ * already scaled by 10^6 is scaled by 10^12, so it needs its own re-scaling step, unlike them).
+ * Rounded half-away-from-zero at the 6th decimal place, exactly `divideDecimal`'s own rounding
+ * convention, so the two inverse-ish operations round consistently.
+ */
+export function multiplyDecimal(a: ScaledDecimal, b: ScaledDecimal): ScaledDecimal {
+  const negative = a < 0n !== b < 0n;
+  const absA = a < 0n ? -a : a;
+  const absB = b < 0n ? -b : b;
+  const product = absA * absB; // scaled by 10^12
+  const quotient = product / SCALE;
+  const remainder = product % SCALE;
+  const rounded = remainder * 2n >= SCALE ? quotient + 1n : quotient;
+  return negative && rounded !== 0n ? -rounded : rounded;
+}
+
+/**
  * Divides two `ScaledDecimal`s and returns a `ScaledDecimal` (i.e. the mathematical quotient,
  * itself re-scaled by 10^6), rounded half-away-from-zero at the 6th decimal place. Throws on
  * division by zero — callers are expected to have already applied an ε floor (FR-1.3) to the
