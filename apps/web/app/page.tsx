@@ -49,11 +49,11 @@ export default async function Home() {
 
   return (
     <main>
-      <h1>Orbio Treasurer</h1>
-      <p className="pitch">
-        A treasury for AI agents on Orbio. It earns inference credit, meters what it burns, and
-        shows the gap in public.
-      </p>
+      <h1>{model.header.productName}</h1>
+      <p className="pitch">{model.header.pitchLine}</p>
+      <p className="how-to-use">{model.header.howToUse}</p>
+      <p className="pitch">{model.header.robinhoodLine}</p>
+      <p className="note">{model.header.statusHint}</p>
 
       {model.noDataNote && <p className="note">{model.noDataNote}</p>}
 
