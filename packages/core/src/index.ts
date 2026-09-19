@@ -60,6 +60,7 @@ export type {
   SettleClaimActivatePlan,
   SnapshotTreasuryParams,
   SnapshotTreasuryResult,
+  TreasuryReadClient,
 } from './chain/index.js';
 export {
   AdapterShapeError as ChainAdapterShapeError,
@@ -147,8 +148,10 @@ export {
 export { openPostgresLedger, PostgresLedgerStore } from './ledger/postgres/store.js';
 export { LedgerCallRecorder } from './ledger/recorder.js';
 // Merge note (S-01 ∥ S-02): the router's CallRecord (router/recorder.ts) and the ledger's
-// (ledger/recorder-types.ts) were written in parallel with different shapes; S-06 adds the adapter.
-// The ledger pair is exported under a distinct name until then.
+// (ledger/recorder-types.ts) were written in parallel with different shapes — S-06's adapter
+// (tick/recorder-adapter.ts, exported below with the rest of S-06) converts one to the other.
+// The ledger pair is still exported under a distinct name (RouterToLedgerCallRecorder's callers
+// only ever need the router-shaped CallRecorder; this pair is for the adapter's own tests/impl).
 export type {
   CallRecord as LedgerCallRecord,
   CallRecorder as LedgerCallRecorderContract,
@@ -244,6 +247,31 @@ export {
   recordUnrecognizedSample,
   revokeKeyStructuredContentSchema,
 } from './mcp/index.js';
+// S-06: the tick loop (docs/PRD-1.0-sprint.md §4 T-6, §6; tasks/S-06.md "In scope") — the pure
+// policy engine, the executors that turn a decision into S-04/S-05 calls, `runTick()` itself, and
+// the router<->ledger CallRecord adapter (see the merge note just above). `apps/web` needs every
+// one of these (`app/v1/_gateway.ts`'s mode/recorder/caller-key wiring, `app/api/tick/route.ts`),
+// and only reaches `core` through this barrel (package.json's single `.` export) — nothing here
+// was reachable from apps/web before this ticket.
+export type {
+  Money as SprintMoney,
+  SprintAction,
+  SprintApiBalance,
+  SprintBuyAction,
+  SprintClaimActivateAction,
+  SprintDecideInput,
+  SprintDecideInputSnapshot,
+  SprintDecision,
+  SprintPolicyConfig,
+  SprintStakeupAction,
+} from './policy/sprint.js';
+export {
+  computeMode,
+  computeRunwayDays,
+  DEFAULT_SPRINT_POLICY_CONFIG,
+  decide,
+  INFINITE_RUNWAY_DAYS,
+} from './policy/sprint.js';
 export type { RedactOptions } from './redact.js';
 export { DEFAULT_ALLOW_TX_HASH_KEYS, redact } from './redact.js';
 export { computeBaselineCostUsd, selectBaselineModel } from './router/baseline.js';
@@ -284,3 +312,17 @@ export type {
   UsageResult,
 } from './router/upstream.js';
 export { forwardChatCompletion, getUpstreamKey } from './router/upstream.js';
+export type {
+  ExecutorActionResult,
+  RunExecutorsDeps,
+  RunExecutorsResult,
+  TickExecClient,
+} from './tick/executors.js';
+export { runExecutors } from './tick/executors.js';
+export {
+  isLedgerRowId,
+  RouterToLedgerCallRecorder,
+  toLedgerCallRecord,
+} from './tick/recorder-adapter.js';
+export type { RunTickParams, RunTickResult, TickActionSummary, TickSummary } from './tick/tick.js';
+export { computeTickBucket, runTick } from './tick/tick.js';

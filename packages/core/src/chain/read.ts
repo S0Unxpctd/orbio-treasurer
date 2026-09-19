@@ -65,6 +65,22 @@ export interface ChainSnapshot {
   readonly usedMulticall: boolean;
 }
 
+/** The minimal viem `PublicClient` surface `readTreasury()` actually calls — `multicall`,
+ *  `readContract` (the sequential fallback) and `getBalance`. S-06 discovery (tasks/S-06.md
+ *  Discovered): `tick/tick.ts`'s injectable test client (AC2: "fake chain client") only needs to
+ *  satisfy this, not viem's full ~70-member `PublicClient` — narrowed here, rather than at every
+ *  call site, so a test fake never has to fake dozens of unrelated methods. Any real
+ *  `PublicClient` (the production default, and `read.test.ts`'s/`treasury-read.ts`'s own real
+ *  client) already satisfies this structurally, so nothing about `readTreasury()`'s real
+ *  behaviour changes. `Pick<PublicClient, ...>`, not a hand-rolled interface (unlike
+ *  `chain/buy.ts`'s `BuyExecClient`): viem's `multicall`/`readContract` are heavily overloaded
+ *  generics — a hand-rolled simplification of their signature is NOT assignable from a real
+ *  `PublicClient` (contravariant parameter mismatch), which would break every real call site.
+ *  A plain object-literal test fake therefore still needs an explicit cast to satisfy this exact
+ *  type (see `tick/tick.test.ts`'s `fakeClient()`) — the tradeoff is real-client compatibility
+ *  everywhere else, which matters far more here. */
+export type TreasuryReadClient = Pick<PublicClient, 'multicall' | 'readContract' | 'getBalance'>;
+
 export interface ReadTreasuryOptions {
   readonly hot: Address;
   /** Wallet whose staking position is read. Defaults to the zero address — ticket AC1: "a
@@ -82,7 +98,7 @@ const ZERO_ADDRESS: Address = '0x0000000000000000000000000000000000000000';
  *  Multicall3 — the degraded path used when multicall itself is unavailable (see this file's
  *  header comment). */
 async function sequentialReadContracts(
-  client: PublicClient,
+  client: TreasuryReadClient,
   contracts: readonly {
     readonly address: Address;
     readonly abi: unknown;
@@ -127,7 +143,7 @@ function toQuoteResult(raw: {
 }
 
 export async function readTreasury(
-  client: PublicClient,
+  client: TreasuryReadClient,
   addresses: ChainAddresses,
   options: ReadTreasuryOptions,
 ): Promise<ChainSnapshot> {

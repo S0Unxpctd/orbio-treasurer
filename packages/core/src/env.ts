@@ -149,6 +149,14 @@ const baseSchema = z.object({
   ROUTER_ALLOW: optionalString,
   TREASURER_MODE: z.enum(['normal', 'eco', 'critical']).default('normal'),
 
+  // --- S-06: the tick loop (docs/PRD-1.0-sprint.md §4 T-6, §6; tasks/S-06.md "In scope") ---
+  // Compared in constant time against the `x-tick-secret` header by
+  // `apps/web/app/api/tick/route.ts` (audit focus: "TICK_SECRET compared in constant time").
+  // Optional at the schema level (CLAUDE.md #5c: the kit never *requires* this) — a deployment
+  // with it unset simply 401s every call, which the route handler enforces itself, same
+  // convention as `GATEWAY_KEYS` above.
+  TICK_SECRET: optionalString,
+
   // --- hosted only (Supabase-backed ledger; DATABASE_URL is an accepted alternative) ---
   SUPABASE_URL: optionalString,
   SUPABASE_SERVICE_ROLE_KEY: optionalString,
