@@ -131,6 +131,39 @@ describe('.env / .env.example never carry a real key in a committed file (AC7)',
   });
 });
 
+describe('default --gateway placeholder warning (S-10 tasks/S-10.md AC3)', () => {
+  it('prints a clear WARNING line to stdout when --gateway is omitted', () => {
+    const result = runCli(['no-gateway'], workDir);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/WARNING/);
+    expect(result.stdout).toContain('<REFERENCE_HOST>');
+    expect(result.stdout).toContain('--gateway');
+  });
+
+  it('prints no such warning when --gateway is passed explicitly', () => {
+    const result = runCli(['with-gateway', '--gateway', 'http://127.0.0.1:9999'], workDir);
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toMatch(/WARNING/);
+  });
+
+  it('the scaffolded README explains the placeholder only when it is actually used', () => {
+    runCli(['no-gateway2'], workDir);
+    const withoutGateway = readFileSync(
+      join(workDir, 'no-gateway2', 'README.md'),
+      'utf8',
+    ).toLowerCase();
+    expect(withoutGateway).toMatch(/placeholder/);
+
+    runCli(['with-gateway2', '--gateway', 'http://127.0.0.1:9999'], workDir);
+    const withGateway = readFileSync(join(workDir, 'with-gateway2', 'README.md'), 'utf8');
+    // The generic "always pass --gateway" advisory sentence stays either way (it's still true
+    // advice); what must NOT appear once a real gateway was actually given is the specific
+    // "this scaffold's URL is a placeholder" callout and the literal placeholder value itself.
+    expect(withGateway).not.toContain('<REFERENCE_HOST>');
+    expect(withGateway).not.toContain('**Placeholder gateway.**');
+  });
+});
+
 describe('examples/daily-digest matches the generator output (AC5)', () => {
   it('is byte-identical to a fresh `daily-digest` scaffold with no flags', () => {
     const result = runCli(['daily-digest'], workDir);

@@ -7,13 +7,16 @@ somewhere. No wallet, no database account, no chain knowledge needed here.
 ## Quickstart
 
 ```
-npx create-orbio-agent __AGENT_NAME__   # (already done if you're reading this)
+npx create-orbio-agent __AGENT_NAME__ --gateway <treasurer-url> --key otk_...   # (already done if you're reading this)
 cd __AGENT_NAME__
 cp .env.example .env   # then fill in ORBIO_TREASURER_KEY — skip if you passed --key already
 npm start
 npm run register
 ```
 
+Always pass `--gateway <treasurer-url>` (ask the operator for it) — omitting it leaves
+`ORBIO_TREASURER_URL` at a placeholder that can never resolve.
+__GATEWAYWARNING__
 `npm run register` makes this agent show up on the Treasurer's public page within a minute of
 its next call.
 
