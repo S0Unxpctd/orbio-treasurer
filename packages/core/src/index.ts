@@ -7,6 +7,45 @@ export const CORE_VERSION = '0.0.1';
 /** Layers the Treasurer can run at; see PRD §7. */
 export type Layer = 'L0' | 'L1' | 'L2a' | 'L2b';
 
+// S-03: chain 4663 read (packages/core/src/chain/). `AdapterShapeError` is aliased on export —
+// same reason as the router's own alias just below: mcp/ already owns that name and is frozen
+// (CLAUDE.md banner), so chain/errors.ts is deliberately its own independent class.
+export type {
+  ApiBalance,
+  ChainAdapterShapeSource,
+  ChainAddresses,
+  ChainSnapshot,
+  QuoteResult,
+  ReadTreasuryOptions,
+  RpcTracker,
+  SnapshotTreasuryParams,
+  SnapshotTreasuryResult,
+} from './chain/index.js';
+export {
+  AdapterShapeError as ChainAdapterShapeError,
+  ChainEnvValidationError,
+  createRobinhoodClient,
+  createRpcTracker,
+  creditAbi,
+  DEFAULT_RH_RPC_URLS,
+  deriveOrbioKey,
+  erc20Abi,
+  exchangeAbi,
+  GatewayKeyHttpError,
+  loadChainAddresses,
+  MULTICALL3_ADDRESS,
+  orbioKeyDerivationMessage,
+  parseOrbioBalanceHeader,
+  parseRhRpcUrls,
+  QUOTE_PROBE_MAX_FILLS,
+  QUOTE_PROBE_USDG_IN,
+  ROBINHOOD_CHAIN_ID,
+  readApiBalance,
+  readTreasury,
+  robinhoodChain,
+  snapshotTreasury,
+  stakingAbi,
+} from './chain/index.js';
 // T-002: ledger schema source and env loading. T-011: exact decimal-string arithmetic
 // (ADR-002), pure snapshot metrics math (FR-1.3, FR-3.3), and the LedgerStore interface with
 // its SQLite (kit default) and Postgres (hosted reference/landing) implementations.
