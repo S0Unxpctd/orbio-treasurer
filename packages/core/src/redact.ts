@@ -3,6 +3,10 @@
  *
  * Rules (see PRD §11, FR-2.1, tasks/T-003.md):
  *  - Orbio/OpenRouter keys (`sk-or-...`, any case)   -> `sk-or-…<last4>`
+ *  - Orbio wallet-signed keys (`sk-orb-<epoch>-<base64 sig>`, any case, S-03) -> `sk-orb-…<last4>`.
+ *    The base64 signature body routinely contains `+`, `/` and `=` — chars the generic `sk-...`
+ *    pattern below (deliberately `[A-Za-z0-9_-]` only, to not over-match URL-safe tokens) does not
+ *    cover, so this key shape needs its own pattern or only its first segment gets masked.
  *  - generic gateway keys (`sk-...`, any case)        -> `sk-…<last4>`
  *  - `Bearer <token>`                                  -> `Bearer <masked-token>`
  *  - JWT-looking `xxx.yyy.zzz` base64url               -> `<first4>…<last4>`
@@ -84,7 +88,11 @@ export interface RedactOptions {
 export const REDACTION_PATTERNS = {
   /** Orbio / OpenRouter gateway keys, e.g. sk-or-v1-... (any case) */
   openRouterKey: /sk-or-[A-Za-z0-9_-]{6,}/i,
-  /** Generic `sk-...` style API keys (OpenAI-shaped etc.), not already sk-or- (any case) */
+  /** Orbio wallet-signed keys, e.g. sk-orb-0-<base64(sig bytes)> (any case, S-03). Standard
+   *  (not URL-safe) base64 alphabet — `+`, `/`, `=` — because that's what `base64(sig bytes)`
+   *  produces; matched separately from `genericSecretKey` for that reason (see file header). */
+  orbioKey: /sk-orb-\d+-[A-Za-z0-9+/=]{6,}/i,
+  /** Generic `sk-...` style API keys (OpenAI-shaped etc.), not already sk-or-/sk-orb- (any case) */
   genericSecretKey: /\bsk-[A-Za-z0-9_-]{10,}\b/i,
   /** `Bearer <token>` authorization headers */
   bearerToken: /\bBearer\s+([^\s"'<>]+)/i,
@@ -107,12 +115,14 @@ function toGlobal(re: RegExp): RegExp {
 
 // Non-global copies for single-shot .test()/.replace() calls (avoids /g lastIndex bugs).
 const RE_OPEN_ROUTER = REDACTION_PATTERNS.openRouterKey;
+const RE_ORBIO_KEY = REDACTION_PATTERNS.orbioKey;
 const RE_GENERIC_SK = REDACTION_PATTERNS.genericSecretKey;
 const RE_PRIVATE_KEY = REDACTION_PATTERNS.privateKeyHex;
 const RE_JWT = REDACTION_PATTERNS.jwt;
 
 // Global copies for .replace() sweeps over free-form strings.
 const RE_BEARER_G = toGlobal(REDACTION_PATTERNS.bearerToken);
+const RE_ORBIO_KEY_G = toGlobal(REDACTION_PATTERNS.orbioKey);
 const RE_OPEN_ROUTER_G = toGlobal(REDACTION_PATTERNS.openRouterKey);
 const RE_GENERIC_SK_G = toGlobal(REDACTION_PATTERNS.genericSecretKey);
 const RE_PRIVATE_KEY_G = toGlobal(REDACTION_PATTERNS.privateKeyHex);
@@ -140,6 +150,12 @@ function isBlobExempt(candidate: string): boolean {
 
 /** Best-effort mask for a single already-isolated token (used for Bearer <token>). */
 function maskToken(token: string): string {
+  // Checked before openRouterKey/genericSecretKey: "sk-orb-" is a distinct, longer prefix that
+  // those two patterns' narrower char classes would otherwise only partially mask (see file
+  // header) — order matters here, not just presence of the pattern.
+  if (RE_ORBIO_KEY.test(token)) {
+    return token.replace(RE_ORBIO_KEY, (m) => maskPrefixLast4(m, 7));
+  }
   if (RE_OPEN_ROUTER.test(token)) {
     return token.replace(RE_OPEN_ROUTER, (m) => maskPrefixLast4(m, 6));
   }
@@ -165,6 +181,8 @@ function maskToken(token: string): string {
 function redactString(input: string): string {
   let out = input;
   out = out.replace(RE_BEARER_G, (_m, tok: string) => `Bearer ${maskToken(tok)}`);
+  // Before openRouterKey/genericSecretKey — same ordering reason as maskToken() above.
+  out = out.replace(RE_ORBIO_KEY_G, (m) => maskPrefixLast4(m, 7));
   out = out.replace(RE_OPEN_ROUTER_G, (m) => maskPrefixLast4(m, 6));
   out = out.replace(RE_GENERIC_SK_G, (m) => maskPrefixLast4(m, 3));
   out = out.replace(RE_PRIVATE_KEY_G, (m) => maskPrefixLast4(m, 2));

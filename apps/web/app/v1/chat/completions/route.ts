@@ -112,7 +112,7 @@ export async function POST(request: Request): Promise<Response> {
   let upstreamKey: string;
   try {
     baseUrl = getGatewayBaseUrl(env);
-    upstreamKey = getUpstreamKey(env);
+    upstreamKey = await getUpstreamKey(env);
   } catch (err) {
     logError('v1/chat/completions: env config error', { err });
     return jsonError(500, 'config', 'server misconfigured');

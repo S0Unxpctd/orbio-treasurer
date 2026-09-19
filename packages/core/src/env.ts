@@ -55,6 +55,42 @@ const baseSchema = z.object({
   LANDING_URL: optionalString,
   LANDING_AGENT_TOKEN: optionalString,
 
+  // --- S-03: treasury read + wallet-signed key (docs/PRD-1.0-sprint.md §3, §4 T-3) ---
+  // Address shape/checksum is validated where they're actually used (chain/contracts.ts, via
+  // viem's getAddress()) — not here — so a plain gateway-only boot (no chain features) never
+  // pays for it. `RH_RPC_URLS` (plural) is new and distinct from the existing `RH_RPC_URL`
+  // (singular, L2a Uniswap stake client only, above) — see tasks/S-03.md "In scope".
+  RH_RPC_URLS: z
+    .string()
+    .min(1)
+    .default('https://robinhood-rpc.publicnode.com,https://rpc.ordofi.network'),
+  CREDIT_ADDRESS: optionalString,
+  STAKING_ADDRESS: optionalString,
+  EXCHANGE_ADDRESS: optionalString,
+  ORBIO_ADDRESS: optionalString,
+  USDG_ADDRESS: optionalString,
+  NVDA_ADDRESS: optionalString,
+  PAYOUT_ADDRESS: optionalString,
+  // `getUpstreamKey()` (router/upstream.ts) prefers this over `ORBIO_KEY` when set (CLAUDE.md #5:
+  // never a literal in source — the derivation itself lives in chain/key.ts). Shape-validated here
+  // (0x + 64 hex) since a malformed value should fail loudly at boot, by name only (never logged).
+  TREASURER_PRIVATE_KEY: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{64}$/, 'expected a 0x-prefixed 64-hex private key')
+    .optional(),
+  // The wallet whose on-chain position (`positionOf`/`settledOf`) readTreasury reads. Optional —
+  // ticket AC1: "a zero-position read still returns a well-formed snapshot with zeros" when unset.
+  STAKER_ADDRESS: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/, 'expected a 0x-prefixed 40-hex address')
+    .optional(),
+  // Optional: only present when the staking wallet is dedicated and So has provided it (S-04
+  // automates settle/claim/activate from it). Never required, never logged.
+  STAKER_PRIVATE_KEY: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{64}$/, 'expected a 0x-prefixed 64-hex private key')
+    .optional(),
+
   // --- S-01: gateway + router (docs/PRD-1.0-sprint.md §4 T-1) ---
   // Comma-separated `otk_<32 hex>` values, hashed with sha256 at boot (router/keys.ts). Optional
   // at the env-schema level (CLAUDE.md #5c: the kit never *requires* this) — a gateway deployment

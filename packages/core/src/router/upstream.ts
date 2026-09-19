@@ -3,8 +3,10 @@
  * and `stream: true` (SSE passthrough, reading the final `usage` chunk) and the 402/5xx mapping.
  * Not part of `route.ts`'s pure surface — this is the I/O edge `route()`'s decision feeds into.
  */
+import type { Hex } from 'viem';
 import { z } from 'zod';
 
+import { deriveOrbioKey } from '../chain/key.js';
 import { AdapterShapeError } from './errors.js';
 
 const usageSchema = z
@@ -198,14 +200,44 @@ export async function forwardChatCompletion(
   };
 }
 
+// S-03: derived key cache, keyed on the exact (privateKey, epoch) pair. `deriveOrbioKey()` is
+// deterministic (chain/key.test.ts's AC4 test) so caching is a pure perf/no-repeat-signing
+// optimization, never a correctness concern — a changed `TREASURER_PRIVATE_KEY` (or epoch, once
+// rotation exists) simply misses the cache and re-derives. Never logged; the cache only ever
+// holds values that were already in `env` (also never logged) and the key they derive.
+let derivedKeyCache: {
+  readonly privateKey: string;
+  readonly epoch: number;
+  readonly key: string;
+} | null = null;
+
+const DEFAULT_KEY_EPOCH = 0;
+
 /**
  * The upstream-key seam (ticket: "wallet-signed key derivation lands in S-03; keep a
- * `getUpstreamKey()` seam"). For S-01, just `ORBIO_KEY` from env — throws (never logs the value)
- * if unset, which the route handler turns into a safe 500.
+ * `getUpstreamKey()` seam"). S-03: if `TREASURER_PRIVATE_KEY` is set, derive
+ * `sk-orb-0-<base64(sig)>` from it (chain/key.ts's `deriveOrbioKey`) and use that; otherwise
+ * fall back to the plain `ORBIO_KEY` from env, as in S-01. Throws (never logging either value)
+ * if neither is set, which the route handler turns into a safe 500.
  */
-export function getUpstreamKey(env: { readonly ORBIO_KEY?: string | undefined }): string {
+export async function getUpstreamKey(env: {
+  readonly ORBIO_KEY?: string | undefined;
+  readonly TREASURER_PRIVATE_KEY?: string | undefined;
+}): Promise<string> {
+  if (env.TREASURER_PRIVATE_KEY) {
+    if (
+      derivedKeyCache &&
+      derivedKeyCache.privateKey === env.TREASURER_PRIVATE_KEY &&
+      derivedKeyCache.epoch === DEFAULT_KEY_EPOCH
+    ) {
+      return derivedKeyCache.key;
+    }
+    const key = await deriveOrbioKey(env.TREASURER_PRIVATE_KEY as Hex, DEFAULT_KEY_EPOCH);
+    derivedKeyCache = { privateKey: env.TREASURER_PRIVATE_KEY, epoch: DEFAULT_KEY_EPOCH, key };
+    return key;
+  }
   if (!env.ORBIO_KEY) {
-    throw new Error('ORBIO_KEY is not set (S-03 will replace this with wallet-signed derivation)');
+    throw new Error('Neither TREASURER_PRIVATE_KEY nor ORBIO_KEY is set');
   }
   return env.ORBIO_KEY;
 }

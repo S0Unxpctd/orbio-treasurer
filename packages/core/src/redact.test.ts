@@ -4,6 +4,10 @@ import { DEFAULT_ALLOW_TX_HASH_KEYS, REDACTION_PATTERNS, redact } from './redact
 // Fake / well-known test-only secrets. Never real credentials.
 const OR_KEY = 'sk-or-v1-TESTONLYabcdef1234';
 const GENERIC_KEY = 'sk-TESTONLYabcdefghijklmnop1234';
+// S-03: sk-orb-<epoch>-<base64(sig bytes)> shape (tasks/S-03.md AC5). Fabricated bytes — never a
+// real signature — chosen to exercise the standard (non-URL-safe) base64 alphabet's `+`, `/` and
+// `=` padding, which is exactly what the generic sk-... pattern's char class does not cover.
+const ORBIO_KEY = 'sk-orb-0-//79AAECA++/vz4/AA==';
 // Hardhat's well-known default account #0 private key (public fixture, not a real secret).
 const HARDHAT_PK = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 const ETH_ADDRESS = '0x00000000000000000000000000000000deadbeef'; // 40 hex chars, public
@@ -16,6 +20,7 @@ const ISO_DATE = '2026-09-08T12:34:56.789Z';
 describe('REDACTION_PATTERNS', () => {
   it('is exported for direct pattern-level testing', () => {
     expect(REDACTION_PATTERNS.openRouterKey).toBeInstanceOf(RegExp);
+    expect(REDACTION_PATTERNS.orbioKey).toBeInstanceOf(RegExp);
     expect(REDACTION_PATTERNS.genericSecretKey).toBeInstanceOf(RegExp);
     expect(REDACTION_PATTERNS.bearerToken).toBeInstanceOf(RegExp);
     expect(REDACTION_PATTERNS.jwt).toBeInstanceOf(RegExp);
@@ -40,6 +45,31 @@ describe('redact() — positive cases (must mask)', () => {
     const out = redact(HARDHAT_PK) as string;
     expect(out).toBe(`0x…${HARDHAT_PK.slice(-4)}`);
     expect(out).not.toContain(HARDHAT_PK.slice(2, -4));
+  });
+
+  // S-03 AC5: "redact() masks sk-orb-... keys and 0x private keys (64 hex)". The 0x case is the
+  // same pattern/test as the ticket-AC1 case just above (privateKeyHex has no shape distinction
+  // between a treasurer/staker private key and any other 0x+64-hex value — see the file header's
+  // "0x + 64-hex ambiguity" note); the sk-orb- case is new for S-03 and gets its own pattern.
+  it('fully masks a wallet-signed sk-orb- key, including its +/= base64 chars (S-03 AC5)', () => {
+    const out = redact(ORBIO_KEY) as string;
+    expect(out).toBe(`sk-orb-…${ORBIO_KEY.slice(-4)}`);
+    // The whole base64 body — not just the part before the first `+`/`/` — must be gone.
+    expect(out).not.toContain('79AAECA');
+    expect(out).not.toContain('vz4');
+  });
+
+  it('masks a TREASURER_PRIVATE_KEY/STAKER_PRIVATE_KEY-shaped env value regardless of pattern match (S-03)', () => {
+    // _KEY-suffixed key name -> whole-value masking (sensitiveKeyName), independent of whether
+    // privateKeyHex would also have matched — belt and braces for the env vars S-03 adds.
+    const out = redact({ TREASURER_PRIVATE_KEY: HARDHAT_PK }) as Record<string, unknown>;
+    expect(out.TREASURER_PRIVATE_KEY).not.toBe(HARDHAT_PK);
+    expect(String(out.TREASURER_PRIVATE_KEY)).not.toContain(HARDHAT_PK.slice(2, -4));
+  });
+
+  it('masks an sk-orb- key nested under an unrelated object key (not just top-level strings)', () => {
+    const out = redact({ authorization: `Bearer ${ORBIO_KEY}` }) as Record<string, unknown>;
+    expect(out.authorization).toBe(`Bearer sk-orb-…${ORBIO_KEY.slice(-4)}`);
   });
 
   it('masks the token in a Bearer header, keeping the scheme word', () => {

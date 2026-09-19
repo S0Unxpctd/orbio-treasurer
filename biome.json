@@ -39,7 +39,12 @@
   },
   "overrides": [
     {
-      "includes": ["scripts/**", "packages/create-orbio-agent/**", "apps/web/**"],
+      "includes": [
+        "scripts/**",
+        "packages/core/scripts/**",
+        "packages/create-orbio-agent/**",
+        "apps/web/**"
+      ],
       "linter": {
         "rules": {
           "suspicious": {

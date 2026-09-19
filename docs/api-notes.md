@@ -67,6 +67,64 @@ _(P-1 … P-8: date, yes/no, evidence, default set)_
 - `DOMAIN_SEPARATOR()` = `0x7a3d7400b27830f4f91c2c16a082486d67c1befecaec2f53b33f1f35d5b62036`, reproduced exactly with EIP-712 domain **{ name: "Global Dollar", version: "1", chainId: 4663, verifyingContract: 0x5fc5…d168 }**. These are the signing parameters for an x402 EIP-3009 payload on this chain.
 - Consequence: PRD §18 path B is technically viable; the missing piece is a facilitator for `eip155:4663` (self-hosted) and Orbio's merchant endpoint.
 
+## S-03 chain reads (2026-09-19)
+
+Live, read-only `eth_call`s via `https://robinhood-rpc.publicnode.com` (viem), no rate limit hit
+in ~15 calls over the session. `https://rpc.ordofi.network` also confirmed live (`eth_chainId` ->
+4663). All addresses per PRD §3.
+
+- `eth_chainId` -> `4663` on both RPCs.
+- Multicall3 (standard CREATE2 address `0xca11bde05977b3631167028862be2a173976ca11`) **IS**
+  deployed on 4663 — `eth_getCode` returned 7618 bytes of bytecode. `readTreasury()` uses
+  `client.multicall()` for the 9 non-ETH reads (allowFailure: true, so a reverting `getQuote`
+  degrades to `null` without failing the batch) and falls back to 9 sequential `readContract`
+  calls only if the multicall call itself throws.
+- `Staking.totalStaked()` = `355360274239331697639652256` (raw, 18 dec -> ~355,360,274.24 ORBIO staked).
+- `Staking.MIN_POSITION()` = `1000000000000000000000` — confirms PRD §3's `1000e18`.
+- `Staking.PERIOD()` = `3600` — confirms PRD §3's hourly periods.
+- `Staking.positionOf(0x0)` = `0`, `Staking.settledOf(0x0)` = `0` — zero address has no position,
+  as expected; used to confirm AC1's "well-formed snapshot with zeros" path (no `STAKER_ADDRESS`
+  configured in this sandbox — no real staking wallet address was available to read against).
+- `CREDIT.decimals()` = `6`, `USDG.decimals()` = `6` — confirms PRD §3.
+- `CREDIT.balanceOf(0x0)` = `0`, `USDG.balanceOf(0x0)` = `0`.
+- `getBalance(0x0)` (native ETH) = `4986956241336233746` (~4.987 ETH sitting at the zero
+  address — a well-known chain artifact, not a Treasurer balance).
+- `Exchange.getQuote(10 USDG, 10)` = `{ creditOut: 13333332, usdgSpent: 10000000, feeAtoms: 0,
+  fills: 2, reason: 0 }` -> 13.333332 CREDIT for 10 USDG, a **25% discount**
+  (`1 - usdgSpent/creditOut`). Note the book has moved since the 2026-09-16 probe's 22.22 CREDIT
+  / 55% discount reading (PRD §3) — the book's depth changes call to call, as expected; this is
+  a live snapshot, not a fixed constant. The published `exchange.json` ABI (fetched
+  2026-09-19 from `https://www.orbio.so/protocol/abi/exchange.json`) shows `getQuote` returns
+  the *full* `{creditOut, usdgSpent, feeAtoms, fills, reason}` tuple, richer than the
+  `(creditOut, fills)` shorthand in PRD §3's prose.
+
+**Discovered**: the PRD's own printed USDG address, `0x5fc5360d0400a0Fd4f2af552ADD042D716F1d168`
+(docs/PRD-1.0-sprint.md §3, lowercase `d` right after `5fc5360`), is **not a valid EIP-55
+checksum** — viem's `getAddress()` on the all-lowercase form produces
+`0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168` (uppercase `D` there instead), which matches the
+same address used elsewhere (e.g. this session's own project-instructions header). Not a
+different address — same 20 bytes either way — just a one-character transcription slip in the
+PRD's mixed-case rendering. `chain/contracts.ts`'s `loadChainAddresses()` re-checksums via
+`getAddress()` regardless of input casing, so this is harmless in code; flagging it so the PRD
+text itself gets fixed and nobody hand-copies the bad casing into a context that *does* do a
+strict checksum comparison. `.env.example` and `docs/runbook.md` both use the corrected casing.
+
+**Wallet-signed key derivation (AC4)** — throwaway key via viem's `generatePrivateKey()` (never
+printed, never committed, discarded after this session): `deriveOrbioKey(pk, 0)` produced a
+`sk-orb-0-<88-char base64 sig>` key; `GET https://api.orbio.so/api/v1/key` with
+`Authorization: Bearer <that key>` returned:
+
+```
+status: 401
+body: {"error":{"message":"This Orbio API key is unknown or has been revoked.","type":"invalid_request_error","code":"invalid_api_key","param":null}}
+```
+
+"unknown or has been revoked" (not "malformed") is exactly the acceptable evidence the ticket
+names — the key is well-formed enough for the gateway to recognize the shape and look it up; it
+simply has no activated balance (a throwaway wallet was never funded/activated). Confirms the
+derivation message string (`"Orbio API key · chain 4663 · epoch 0"`, with its two
+U+00B7 MIDDLE DOT characters) matches the gateway's own derivation.
+
 ## Answers
 
 **2026-09-08, Yash (Orbio), builders Telegram**, on the agent boilerplate with a self-sustaining cycle that buys credits off the order book:
