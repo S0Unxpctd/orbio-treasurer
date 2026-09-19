@@ -37,6 +37,19 @@ const ZERO_ADDRESS: Address = '0x0000000000000000000000000000000000000000';
 const AGENT_SLUG = 'default';
 const CONFIRMATION_PHRASE = 'yes-send';
 
+/** UTC-day idempotency bucket (`cli-YYYY-MM-DD`), not a timestamp (S-05 audit pass 1, Minor 1):
+ *  a timestamp-based key was unique on every invocation, defeating replay protection for the one
+ *  path a human actually runs — a crash between a successful `executeBuy()` and the ledger
+ *  write, followed by a manual re-run, is now recognized as the SAME key for the rest of that
+ *  UTC day (mirrors `buy.ts`'s own `utcDateKey()`: UTC calendar fields only, never a local
+ *  getter, so this never drifts with the process's timezone). */
+function cliIdempotencyKey(now: Date): string {
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(now.getUTCDate()).padStart(2, '0');
+  return `cli-${year}-${month}-${day}`;
+}
+
 interface Args {
   readonly usdg: string;
   readonly live: boolean;
@@ -146,7 +159,7 @@ async function main(): Promise<void> {
       usdgIn,
       caps: wantsLiveSend ? caps : { ...caps, treasurerLive: false },
       maxFeeGweiCap,
-      idempotencyKey: `cli-${new Date().toISOString()}`,
+      idempotencyKey: cliIdempotencyKey(new Date()),
     });
 
     console.log(JSON.stringify(redact(result), null, 2));
