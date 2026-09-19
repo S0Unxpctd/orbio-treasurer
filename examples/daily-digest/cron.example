@@ -1,0 +1,3 @@
+# crontab line for daily-digest. Node 22's built-in --env-file means no extra dependency.
+# `crontab -e`, then add (adjust the path to wherever you scaffolded this agent):
+0 8 * * * cd /path/to/daily-digest && node --env-file=.env agent.mjs >> agent.log 2>&1 && node --env-file=.env register.mjs >> agent.log 2>&1
