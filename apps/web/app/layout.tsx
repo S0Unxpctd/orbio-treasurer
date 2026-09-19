@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 
+import './globals.css';
+
 export const metadata = {
   title: 'Orbio Treasurer',
   description: 'A treasury for self-funded agents.',

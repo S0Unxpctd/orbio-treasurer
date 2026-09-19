@@ -14,7 +14,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "turbo run typecheck && tsc -p scripts/tsconfig.json --noEmit",
-    "smoke": "pnpm --filter @orbio-treasurer/web smoke",
+    "smoke": "tsx scripts/smoke.ts",
     "db:migrate": "supabase db push",
     "tick": "pnpm --filter @orbio-treasurer/book-daily tick",
     "probe": "tsx scripts/probe.ts",
