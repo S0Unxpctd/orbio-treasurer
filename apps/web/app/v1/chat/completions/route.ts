@@ -7,7 +7,6 @@
  * response, adding `x-treasurer-*` headers → record the call, fire-and-forget.
  */
 import {
-  authenticateBearer,
   type CallRecord,
   type CallStatus,
   computeBaselineCostUsd,
@@ -25,9 +24,10 @@ import {
   getCatalog,
   getEnv,
   getGatewayBaseUrl,
-  getKeyStore,
+  getMode,
   getRecorder,
   getRouterAllowList,
+  resolveCaller,
 } from '../../_gateway.js';
 
 export const runtime = 'nodejs';
@@ -88,7 +88,7 @@ export async function POST(request: Request): Promise<Response> {
     return jsonError(500, 'config', 'server misconfigured');
   }
 
-  const caller = authenticateBearer(request.headers.get('authorization'), getKeyStore(env));
+  const caller = await resolveCaller(env, request.headers.get('authorization'));
   if (!caller) {
     return jsonError(401, 'auth', 'missing or invalid API key');
   }
@@ -134,10 +134,12 @@ export async function POST(request: Request): Promise<Response> {
     responseFormat: parsed.responseFormat,
   };
 
+  const mode = await getMode(env);
+
   let routed: ReturnType<typeof routeRequest>;
   try {
     routed = routeRequest(routeInput, catalogEntries, {
-      mode: env.TREASURER_MODE,
+      mode,
       ...(allowList ? { allowList } : {}),
     });
   } catch (err) {
@@ -151,7 +153,7 @@ export async function POST(request: Request): Promise<Response> {
   const baselineHeader = request.headers.get('x-baseline-model');
   const baseline = selectBaselineModel(catalogEntries, allowList, baselineHeader);
 
-  const recorder = getRecorder();
+  const recorder = await getRecorder(env);
   const baseRecordFields = {
     keyId: caller.keyId,
     agentId: caller.agentId,
