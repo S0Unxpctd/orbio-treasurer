@@ -1,0 +1,464 @@
+#!/usr/bin/env bash
+# Is the Orbio gateway's price actually lower? Compares Orbio's live per-token
+# price table against OpenRouter's (its upstream), and reconciles a real
+# usage.cost against the table.
+#
+# Read-only. Both /models endpoints are public — this script never needs a key
+# and never spends money.
+set -euo pipefail
+
+ORBIO_URL="${ORBIO_API_URL:-https://api.orbio.so/api/v1}"
+ORBIO_URL="${ORBIO_URL%/}"
+OPENROUTER_URL='https://openrouter.ai/api/v1'
+
+die() { printf 'orbio-cost: %s\n' "$*" >&2; exit 1; }
+command -v curl >/dev/null || die "missing dependency: curl"
+command -v jq   >/dev/null || die "missing dependency: jq"
+
+CACHE_DIR="${TMPDIR:-/tmp}/orbio-cost-cache"
+mkdir -p "$CACHE_DIR"
+
+# --- key + local state -------------------------------------------------------
+# The key is read for /key only. It is never printed: only prefix and last4.
+repo_root() { git rev-parse --show-toplevel 2>/dev/null || pwd; }
+
+load_env() {
+  local envfile line key val
+  envfile="$(repo_root)/.env"
+  [ -f "$envfile" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    key="$(printf '%s' "${line%%=*}" | tr -d '[:space:]')"
+    case "$key" in ORBIO_API_KEY|ORBIO_API_URL) ;; *) continue ;; esac
+    val="${line#*=}"
+    val="${val%"${val##*[![:space:]]}"}"
+    val="${val#\'}"; val="${val%\'}"; val="${val#\"}"; val="${val%\"}"
+    [ -n "${!key:-}" ] || export "$key=$val"
+  done < "$envfile"
+}
+load_env
+API_KEY="${ORBIO_API_KEY:-}"
+STATE_DIR="$(repo_root)/.orbio"
+SNAPSHOTS="$STATE_DIR/cost-snapshots.jsonl"
+
+redacted_key() {
+  local k="$1" n=${#1}
+  if [ "$n" -le 8 ]; then printf '<%d chars>' "$n"
+  else printf '%s…%s' "${k:0:8}" "${k: -4}"; fi
+}
+
+require_key() {
+  [ -n "$API_KEY" ] || die "ORBIO_API_KEY is not set. Add it to $(repo_root)/.env"
+}
+
+# GET /key -> prints the JSON body, or dies with the reason.
+read_key() {
+  require_key
+  local body status
+  body="$(mktemp)"; trap 'rm -f "$body"' RETURN
+  status="$(curl -sS --max-time 30 -H "Authorization: Bearer ${API_KEY}" \
+    -H 'Accept: application/json' -w '%{http_code}' -o "$body" "$ORBIO_URL/key")"
+  case "$status" in
+    200) : ;;
+    401) die "key rejected by GET /key ($(redacted_key "$API_KEY")). Check ORBIO_API_KEY." ;;
+    *)   die "GET /key returned HTTP $status" ;;
+  esac
+  jq -e 'has("balance")' "$body" >/dev/null 2>&1 \
+    || die "GET /key returned an unrecognized shape. Per CLAUDE.md 6, append a redacted sample to docs/api-notes.md under \"Unrecognized samples\"."
+  cat "$body"
+}
+
+# Fetch a /models list, cached for 15 minutes so an audit does not hammer either
+# host. Prints the cache file path.
+fetch() {
+  local name="$1" url="$2" f="$CACHE_DIR/$1.json" status
+  if [ -f "$f" ] && [ -n "$(find "$f" -mmin -15 2>/dev/null)" ]; then
+    printf '%s' "$f"; return 0
+  fi
+  status="$(curl -sS --max-time 45 -H 'Accept: application/json' \
+    -w '%{http_code}' -o "$f.tmp" "$url/models")" || die "$name: request failed"
+  [ "$status" = "200" ] || { rm -f "$f.tmp"; die "$name /models returned HTTP $status"; }
+  jq -e '.data|type=="array"' "$f.tmp" >/dev/null 2>&1 \
+    || { rm -f "$f.tmp"; die "$name /models returned an unexpected shape (no .data array)"; }
+  mv "$f.tmp" "$f"
+  printf '%s' "$f"
+}
+
+per_m() { # per-token string -> $/M, or "dynamic"
+  jq -rn --arg p "$1" 'if $p == "-1" or $p == "" or $p == "null" then "dynamic"
+                       else (($p|tonumber) * 1000000 | . * 10000 | round / 10000 | tostring) end'
+}
+
+cmd_audit() {
+  local o r
+  o="$(fetch orbio "$ORBIO_URL")"; r="$(fetch openrouter "$OPENROUTER_URL")"
+  jq -rn --slurpfile O "$o" --slurpfile R "$r" '
+    ($O[0].data | map(select(.pricing.prompt != null and .pricing.prompt != "-1")) | INDEX(.id)) as $o |
+    ($R[0].data | map(select(.pricing.prompt != null and .pricing.prompt != "-1")) | INDEX(.id)) as $r |
+    [$o | keys[] | select($r[.] != null)] as $shared |
+    ($shared | map(. as $id |
+      { id: $id,
+        same: (($o[$id].pricing.prompt|tonumber) == ($r[$id].pricing.prompt|tonumber)
+           and ($o[$id].pricing.completion|tonumber) == ($r[$id].pricing.completion|tonumber)),
+        cheaper: (($o[$id].pricing.prompt|tonumber) < ($r[$id].pricing.prompt|tonumber)
+              or  ($o[$id].pricing.completion|tonumber) < ($r[$id].pricing.completion|tonumber)),
+        pricier: (($o[$id].pricing.prompt|tonumber) > ($r[$id].pricing.prompt|tonumber)
+              or  ($o[$id].pricing.completion|tonumber) > ($r[$id].pricing.completion|tonumber)) })) as $cmp |
+    "Orbio vs OpenRouter — live per-token list price",
+    "",
+    "  orbio models listed      : \($O[0].data|length)",
+    "  openrouter models listed : \($R[0].data|length)",
+    "  comparable (both, fixed) : \($shared|length)",
+    "",
+    "  identical price          : \($cmp|map(select(.same))|length)",
+    "  orbio cheaper            : \($cmp|map(select(.cheaper))|length)",
+    "  orbio MORE EXPENSIVE     : \($cmp|map(select(.pricier))|length)",
+    "",
+    (if ($cmp|map(select(.pricier))|length) > 0 then
+       "  Models where Orbio costs more:",
+       ($cmp|map(select(.pricier))|.[:20][]|"    \(.id)")
+     else
+       "  Verdict: Orbio never charges more per token than OpenRouter."
+     end),
+    "",
+    (if ($cmp|map(select(.cheaper))|length) > 0 then
+       ("  Models where Orbio costs less:",
+        ($cmp|map(select(.cheaper))|.[:20][]|"    \(.id)"))
+     else empty end)
+  '
+  cat <<'EOF'
+
+What this means: the per-token rate is a pass-through of OpenRouter list price.
+Routing through Orbio does NOT lower the sticker price of a token.
+
+The saving comes from buying credits below face value on the Orbio order book
+(10-80% off, funded by $ORBIO trading fees). So the real question is not "is the
+rate lower" but "what did I pay per dollar of credit". Model choice is the other
+lever, and usually the bigger one.
+EOF
+}
+
+cmd_compare() {
+  local id="${1:-}"; [ -n "$id" ] || die "usage: orbio-cost compare <model-id>"
+  local o r
+  o="$(fetch orbio "$ORBIO_URL")"; r="$(fetch openrouter "$OPENROUTER_URL")"
+  jq -rn --slurpfile O "$o" --slurpfile R "$r" --arg id "$id" '
+    ($O[0].data | map(select(.id == $id))[0]) as $o |
+    ($R[0].data | map(select(.id == $id))[0]) as $r |
+    if $o == null then "not on Orbio: \($id)   (try: orbio-cost models \($id|split("/")[0]))"
+    else
+      "model      : \($id)",
+      "orbio      : in $\(($o.pricing.prompt|tonumber)*1000000|.*10000|round/10000)/M   out $\(($o.pricing.completion|tonumber)*1000000|.*10000|round/10000)/M",
+      (if $r == null then "openrouter : not listed publicly — no comparison possible"
+       else
+         "openrouter : in $\(($r.pricing.prompt|tonumber)*1000000|.*10000|round/10000)/M   out $\(($r.pricing.completion|tonumber)*1000000|.*10000|round/10000)/M",
+         "",
+         (if ($o.pricing.prompt|tonumber) == ($r.pricing.prompt|tonumber)
+             and ($o.pricing.completion|tonumber) == ($r.pricing.completion|tonumber)
+          then "verdict    : IDENTICAL — same per-token rate, no sticker-price saving"
+          elif ($o.pricing.prompt|tonumber) > ($r.pricing.prompt|tonumber)
+            or ($o.pricing.completion|tonumber) > ($r.pricing.completion|tonumber)
+          then "verdict    : ORBIO IS MORE EXPENSIVE on at least one leg"
+          else "verdict    : orbio is cheaper on at least one leg" end)
+       end)
+    end'
+}
+
+cmd_models() {
+  local filter="${1:-}" f; f="$(fetch orbio "$ORBIO_URL")"
+  jq -r --arg f "$filter" '
+    .data
+    | map(select($f == "" or (.id|ascii_downcase|contains($f|ascii_downcase))))
+    | sort_by(.id)[]
+    | [ .id,
+        (if .pricing.prompt == "-1" then "dynamic" else ((.pricing.prompt|tonumber)*1000000|.*10000|round/10000|tostring) end),
+        (if .pricing.completion == "-1" then "dynamic" else ((.pricing.completion|tonumber)*1000000|.*10000|round/10000|tostring) end),
+        (.context_length|tostring) ] | @tsv' "$f" \
+  | { printf 'MODEL\t$/M IN\t$/M OUT\tCONTEXT\n'; cat; } | column -t -s"$(printf '\t')"
+}
+
+cmd_cheapest() {
+  local n=10 free=0 all=0 a f
+  for a in "$@"; do
+    case "$a" in
+      --free) free=1 ;;
+      --all)  all=1 ;;
+      ''|*[!0-9]*) die "cheapest: expected a number, --free or --all, got '$a'" ;;
+      *) n="$a" ;;
+    esac
+  done
+  f="$(fetch orbio "$ORBIO_URL")"
+  # Chat-capable only by default: sorting raw by price puts embedding and video
+  # models on top, which are cheap because they cannot hold a conversation.
+  jq -r --argjson n "$n" --argjson free "$free" --argjson all "$all" '
+    .data
+    | map(select(.pricing.prompt != null and .pricing.prompt != "-1"))
+    | map(select($all == 1 or ((.architecture.output_modalities // [])|index("text"))))
+    | map(select(if $free == 1 then (.pricing.prompt|tonumber) == 0 else (.pricing.prompt|tonumber) > 0 end))
+    | sort_by([(.pricing.prompt|tonumber), (.pricing.completion|tonumber)])
+    | .[:$n][]
+    | [ .id,
+        ((.pricing.prompt|tonumber)*1000000|.*10000|round/10000|tostring),
+        ((.pricing.completion|tonumber)*1000000|.*10000|round/10000|tostring),
+        (.context_length|tostring) ] | @tsv' "$f" \
+  | { printf 'MODEL\t$/M IN\t$/M OUT\tCONTEXT\n'; cat; } | column -t -s"$(printf '\t')"
+}
+
+cmd_price() {
+  local id="${1:-}"; [ -n "$id" ] || die "usage: orbio-cost price <model-id>"
+  local f; f="$(fetch orbio "$ORBIO_URL")"
+  jq -e --arg id "$id" '.data|map(select(.id==$id))|length>0' "$f" >/dev/null \
+    || die "no model with id '$id' — try: orbio-cost models ${id%%/*}"
+  jq -r --arg id "$id" '
+    .data|map(select(.id==$id))[0]
+    | "id          : \(.id)",
+      "name        : \(.name)",
+      "context     : \(.context_length) tokens",
+      "modality    : \(.architecture.modality // "?")",
+      "prompt      : $\(.pricing.prompt)/token" +
+        (if .pricing.prompt == "-1" then "  (DYNAMIC — cost not predictable in advance)"
+         else "  = $\((.pricing.prompt|tonumber)*1000000)/M" end),
+      "completion  : $\(.pricing.completion)/token" +
+        (if .pricing.completion == "-1" then "  (DYNAMIC)"
+         else "  = $\((.pricing.completion|tonumber)*1000000)/M" end),
+      "params      : \((.supported_parameters // [])|join(", "))"' "$f"
+}
+
+cmd_estimate() {
+  local id="${1:-}" tin="${2:-}" tout="${3:-}"
+  [ -n "$tout" ] || die "usage: orbio-cost estimate <model-id> <prompt-tokens> <completion-tokens>"
+  local f; f="$(fetch orbio "$ORBIO_URL")"
+  jq -r --arg id "$id" --argjson tin "$tin" --argjson tout "$tout" '
+    (.data|map(select(.id==$id))[0]) as $m
+    | if $m == null then "no model with id \($id)"
+      elif $m.pricing.prompt == "-1" then "\($id) is dynamically priced — cost cannot be estimated"
+      else
+        (($m.pricing.prompt|tonumber)*$tin) as $pin |
+        (($m.pricing.completion|tonumber)*$tout) as $pout |
+        "model    : \($id)",
+        "tokens   : \($tin) in / \($tout) out",
+        (def r: .*1000000|round/1000000;
+         "estimate : $\(($pin + $pout|r))   (in $\($pin|r) + out $\($pout|r))"),
+        "per 1k such calls : $\((($pin + $pout) * 1000)|.*10000|round/10000)",
+        "",
+        "ESTIMATED from the price table. The authoritative figure is usage.cost",
+        "on the real response — send usage:{include:true} and read it back."
+      end' "$f"
+}
+
+cmd_verify() {
+  local id="${1:-}" tin="${2:-}" tout="${3:-}" actual="${4:-}"
+  [ -n "$actual" ] || die "usage: orbio-cost verify <model-id> <prompt-tokens> <completion-tokens> <actual-usage-cost>"
+  local f; f="$(fetch orbio "$ORBIO_URL")"
+  jq -r --arg id "$id" --argjson tin "$tin" --argjson tout "$tout" --argjson actual "$actual" '
+    (.data|map(select(.id==$id))[0]) as $m
+    | if $m == null then "no model with id \($id)"
+      elif $m.pricing.prompt == "-1" then "\($id) is dynamically priced — nothing to reconcile against"
+      else
+        ((($m.pricing.prompt|tonumber)*$tin) + (($m.pricing.completion|tonumber)*$tout)) as $exp |
+        ($actual - $exp) as $delta |
+        "model     : \($id)",
+        "tokens    : \($tin) in / \($tout) out",
+        "table says: $\($exp)",
+        "billed    : $\($actual)",
+        "delta     : $\($delta)",
+        "",
+        (if ($delta | fabs) < ($exp * 0.001 + 1e-12)
+         then "MATCH — billing tracks the published table."
+         elif $delta > 0
+         then "OVERCHARGE vs the published table. Capture the full response and append a
+redacted sample to docs/api-notes.md, then raise it with Orbio."
+         else "Billed BELOW the table — a discount is being applied at call time.
+Worth recording in docs/api-notes.md; it changes the cost model." end)
+      end' "$f"
+}
+
+
+cmd_balance() {
+  local j; j="$(read_key)"
+  printf '%s' "$j" | jq -r '
+    "key        : \(.key.prefix // "?")  created \(.key.created_at // "?")",
+    "available  : $\(.balance.available)   (\(.balance.available_micro_usd) micro-USD)",
+    "used       : $\(.balance.used)   (\(.balance.used_micro_usd) micro-USD)",
+    "activated  : $\((((.balance.available_micro_usd|tonumber) + (.balance.used_micro_usd|tonumber)) / 1000000))   (available + used, all-time)",
+    "rate limit : \(.rate_limit.requests_per_minute) req/min, \(.rate_limit.concurrent) concurrent"'
+}
+
+cmd_snapshot() {
+  local j ts
+  j="$(read_key)"
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  mkdir -p "$STATE_DIR"
+  printf '%s' "$j" | jq -c --arg ts "$ts" '{
+    ts: $ts,
+    available_micro: (.balance.available_micro_usd|tonumber),
+    used_micro: (.balance.used_micro_usd|tonumber)
+  }' >> "$SNAPSHOTS"
+  printf 'recorded %s  available=$%s  used=$%s\n' "$ts" \
+    "$(printf '%s' "$j" | jq -r '.balance.available')" \
+    "$(printf '%s' "$j" | jq -r '.balance.used')"
+  printf 'snapshots: %s (%s)\n' "$(wc -l < "$SNAPSHOTS" | tr -d ' ')" "$SNAPSHOTS"
+}
+
+# Burn rate from the first and last snapshot. `used` is cumulative and
+# authoritative — it includes calls that failed after being billed, which a sum
+# of successful usage.cost values would miss.
+burn_json() {
+  [ -f "$SNAPSHOTS" ] || die "no snapshots yet. Run: orbio-cost snapshot   (then again later)"
+  local n; n="$(wc -l < "$SNAPSHOTS" | tr -d ' ')"
+  [ "$n" -ge 2 ] || die "need at least 2 snapshots to measure burn (have $n). Run: orbio-cost snapshot"
+  jq -s '
+    (sort_by(.ts)) as $s |
+    ($s[0]) as $a | ($s[-1]) as $b |
+    (($b.used_micro - $a.used_micro) / 1000000) as $spent |
+    (($b.ts|fromdateiso8601) - ($a.ts|fromdateiso8601)) as $secs |
+    { first: $a.ts, last: $b.ts, samples: ($s|length),
+      elapsed_hours: (($secs / 3600) * 100 | round / 100),
+      spent: $spent,
+      per_day: (if $secs > 0 then ($spent / $secs) * 86400 else 0 end),
+      available: ($b.available_micro / 1000000) }' "$SNAPSHOTS"
+}
+
+cmd_burn() {
+  burn_json | jq -r '
+    "window     : \(.first) → \(.last)  (\(.samples) samples, \(.elapsed_hours)h)",
+    "spent      : $\(.spent * 1000000 | round / 1000000)",
+    "burn rate  : $\(.per_day * 10000 | round / 10000)/day",
+    (if .elapsed_hours < 1 then "\nWindow under an hour — the rate is noisy. Snapshot again later." else empty end)'
+}
+
+cmd_runway() {
+  burn_json | jq -r '
+    if .per_day <= 0 then
+      "available  : $\(.available)",
+      "burn rate  : $0/day over \(.elapsed_hours)h",
+      "runway     : unbounded at this burn rate (nothing spent in the window)"
+    else
+      (.available / .per_day) as $days |
+      "available  : $\(.available)",
+      "burn rate  : $\(.per_day * 10000 | round / 10000)/day",
+      "runway     : \($days * 10 | round / 10) days",
+      "",
+      (if $days < 7 then "SHORT RUNWAY — under a week. Either buy credit (orbio-buy) or route to a cheaper model (orbio-cost cheapest)."
+       elif $days < 30 then "Runway under a month. Worth checking the book for a discount."
+       else "Runway healthy." end)
+    end'
+}
+
+# The submission artifact. Gateway figures are read live. On-chain figures come
+# from --chain <file>, written by the chain layer (packages/core/src/chain),
+# because the selectors need keccak and belong in TypeScript, not here.
+cmd_proof() {
+  local chainfile=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --chain) chainfile="${2:-}"; shift 2 ;;
+      *) die "proof: unknown argument '$1'" ;;
+    esac
+  done
+  local j; j="$(read_key)"
+  local activated used available
+  activated="$(printf '%s' "$j" | jq -r '(((.balance.available_micro_usd|tonumber) + (.balance.used_micro_usd|tonumber)) / 1000000)')"
+  used="$(printf '%s' "$j" | jq -r '.balance.used')"
+  available="$(printf '%s' "$j" | jq -r '.balance.available')"
+
+  printf '## Proof of self-funding\n\n'
+  printf '_Gateway figures read live from `GET /api/v1/key` at %s._\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  if [ -n "$chainfile" ] && [ -f "$chainfile" ]; then
+    jq -r '
+      "| stage | amount | evidence |",
+      "|---|---|---|",
+      "| staked | \(.staked_orbio // "?") ORBIO | [position](\(.explorer // "https://robin.etherscan.io")/address/\(.staking_contract // "")) |",
+      (if .claimed_credit then "| claimed from position | \(.claimed_credit) CREDIT | [tx](\(.explorer)/tx/\(.claim_tx // "")) |" else empty end),
+      (if .activated_from_claim then "| activated from position | \(.activated_from_claim) CREDIT | [tx](\(.explorer)/tx/\(.activate_tx // .claim_tx // "")) |" else empty end),
+      (if .buy_tx then "| bought on the book | \(.bought_credit // "?") CREDIT for \(.usdg_spent // "?") USDG at \(.net_discount // "?") net | [tx](\(.explorer)/tx/\(.buy_tx)) |" else empty end),
+      (if .activated_from_buy then "| activated from buy | \(.activated_from_buy) CREDIT | [tx](\(.explorer)/tx/\(.buy_tx // "")) |" else empty end)
+    ' "$chainfile"
+  else
+    printf '| stage | amount | evidence |\n|---|---|---|\n'
+    printf '| staked | _not supplied_ | run with `--chain <file>` from the chain layer |\n'
+    printf '| claimed | _not supplied_ | |\n'
+    printf '| activated | _not supplied_ | |\n'
+  fi
+
+  printf '| activated (gateway) | $%s | all-time credit on this key |\n' "$activated"
+  printf '| burned | $%s | `used` on `GET /key` |\n' "$used"
+  printf '| remaining | $%s | `available` |\n\n' "$available"
+
+  if [ -f "$SNAPSHOTS" ] && [ "$(wc -l < "$SNAPSHOTS" | tr -d ' ')" -ge 2 ]; then
+    burn_json | jq -r '"Burn rate $\(.per_day * 10000 | round / 10000)/day. Runway \((.available / (if .per_day > 0 then .per_day else 1 end)) * 10 | round / 10) days at that rate.\n"'
+  fi
+
+  if [ -n "$chainfile" ] && [ -f "$chainfile" ]; then
+    # Coverage = self-funded credit / inference actually burned, capped at 100%.
+    # Not burned/activated, which is a utilization ratio and reads far too low.
+    jq -r --arg used "$used" '
+      # Self-funded means credit the POSITION produced. Credit bought on the book
+      # was paid for in USDG and is reported separately — counting it here would
+      # overstate self-funding, which is the one claim the submission rests on.
+      if (.activated_from_claim // .activated_from_buy) then
+        ($used|tonumber) as $burned |
+        ((.activated_from_claim // 0)|tonumber) as $selffunded |
+        if $burned == 0 then
+          "**No inference burned yet.** $\($selffunded) of self-funded credit is standing by."
+        elif $selffunded >= $burned then
+          (($selffunded - $burned) * 1000000 | round / 1000000) as $surplus |
+          "**100% of inference spend was covered by credit from the agent'"'"'s own position** ($\($surplus) surplus)."
+        elif $selffunded == 0 then
+          "**0% of inference spend was covered by the position** — no credit claimed from staking yet.",
+          (if .activated_from_buy then "All credit so far was bought on the book (\(.activated_from_buy) CREDIT activated)." else empty end)
+        else
+          (($selffunded / $burned) * 1000 | round / 10) as $pct |
+          "**\($pct)% of inference spend was covered by credit from the agent'"'"'s own position.**",
+          "Shortfall $\((($burned - $selffunded) * 1000000 | round / 1000000)) came from credit bought on the book or topped up otherwise."
+        end
+      else empty end' "$chainfile"
+  else
+    printf '_Percent-covered needs the on-chain activated figure. Supply `--chain <file>`._\n'
+  fi
+  printf '\n`used` is authoritative: it counts calls that were billed even when the response never arrived.\n'
+}
+
+usage() {
+  cat <<'EOF'
+orbio-cost — what inference costs, what it cost, how long the money lasts
+
+  Forecast and reconcile
+    orbio-cost estimate <id> <in> <out>          forecast a call from the price table
+    orbio-cost verify <id> <in> <out> <actual>   reconcile a real usage.cost
+    orbio-cost models [filter]                   the live price table
+    orbio-cost cheapest [n] [--free] [--all]     cheapest chat models
+    orbio-cost price <model-id>                  one model in full
+
+  Treasury
+    orbio-cost balance                           available / used / activated
+    orbio-cost snapshot                          record a datapoint for burn rate
+    orbio-cost burn                              spend per day across snapshots
+    orbio-cost runway                            days of inference left
+    orbio-cost proof [--chain <file>]            the self-funding artifact, as markdown
+
+  Evidence
+    orbio-cost audit                             Orbio vs OpenRouter per-token price
+
+Never sends a completion. /models is public; /key is read-only. The key is
+never printed. Prices cached 15 minutes in $TMPDIR/orbio-cost-cache.
+EOF
+}
+
+case "${1:-}" in
+  audit)    shift; cmd_audit "$@" ;;
+  balance)  shift; cmd_balance "$@" ;;
+  snapshot) shift; cmd_snapshot "$@" ;;
+  burn)     shift; cmd_burn "$@" ;;
+  runway)   shift; cmd_runway "$@" ;;
+  proof)    shift; cmd_proof "$@" ;;
+  compare)  shift; cmd_compare "$@" ;;
+  models)   shift; cmd_models "$@" ;;
+  cheapest) shift; cmd_cheapest "$@" ;;
+  price)    shift; cmd_price "$@" ;;
+  estimate) shift; cmd_estimate "$@" ;;
+  verify)   shift; cmd_verify "$@" ;;
+  -h|--help|help|'') usage ;;
+  *) die "unknown command '$1' (try: orbio-cost help)" ;;
+esac

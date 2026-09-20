@@ -15,3 +15,5 @@ next-env.d.ts
 *.db
 *.sqlite
 .sync/
+.gstack/
+.orbio/

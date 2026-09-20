@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+# Orbio gateway CLI — OpenAI-compatible inference at https://api.orbio.so/api/v1
+#
+# Secrets discipline (CLAUDE.md §4): the key is never printed, never echoed into
+# a command line visible in `ps`, and never written to a file. Only key_prefix
+# and key_last4 are ever shown.
+set -euo pipefail
+
+DEFAULT_URL='https://api.orbio.so/api/v1'
+
+die() { printf 'orbio: %s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"; }
+
+need curl
+need jq
+
+repo_root() {
+  git rev-parse --show-toplevel 2>/dev/null || pwd
+}
+
+# Load ORBIO_* from the repo .env only if not already in the environment.
+# Reads with `read`, not `source`, so a malformed .env cannot execute anything.
+load_env() {
+  local envfile
+  envfile="$(repo_root)/.env"
+  [ -f "$envfile" ] || return 0
+  local line key val
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    key="${line%%=*}"
+    val="${line#*=}"
+    key="$(printf '%s' "$key" | tr -d '[:space:]')"
+    case "$key" in ORBIO_API_KEY|ORBIO_API_URL) ;; *) continue ;; esac
+    # strip surrounding quotes and trailing whitespace
+    val="${val%"${val##*[![:space:]]}"}"
+    val="${val#\'}"; val="${val%\'}"
+    val="${val#\"}"; val="${val%\"}"
+    [ -n "${!key:-}" ] || export "$key=$val"
+  done < "$envfile"
+}
+
+load_env
+API_URL="${ORBIO_API_URL:-$DEFAULT_URL}"
+API_URL="${API_URL%/}"
+API_KEY="${ORBIO_API_KEY:-}"
+
+redacted_key() {
+  local k="$1" n=${#1}
+  if [ "$n" -le 8 ]; then printf '<%d chars>' "$n"
+  else printf '%s…%s (%d chars)' "${k:0:8}" "${k: -4}" "$n"; fi
+}
+
+require_key() {
+  [ -n "$API_KEY" ] || die "ORBIO_API_KEY is not set. Add it to $(repo_root)/.env — see SKILL.md."
+}
+
+# GET with auth. Writes body to stdout, "status" to the named variable file.
+api_get() {
+  local path="$1" statusfile="$2"
+  curl -sS --max-time 45 \
+    -H "Authorization: Bearer ${API_KEY}" \
+    -H 'Accept: application/json' \
+    -w '%{http_code}' -o "$statusfile" \
+    "${API_URL}${path}"
+}
+
+# Per-token prompt price for a model id, or "unknown". Reads the public /models
+# table (no key, no cost), cached 15 minutes. Used only by the spend gate.
+PRICE_CACHE="${TMPDIR:-/tmp}/orbio-price-cache"
+model_prompt_price() {
+  local id="$1" f="$PRICE_CACHE/models.json" status
+  mkdir -p "$PRICE_CACHE"
+  if [ ! -f "$f" ] || [ -z "$(find "$f" -mmin -15 2>/dev/null)" ]; then
+    status="$(curl -sS --max-time 30 -H 'Accept: application/json' \
+      -w '%{http_code}' -o "$f.tmp" "${API_URL}/models" 2>/dev/null)" || { printf 'unknown'; return 0; }
+    if [ "$status" = "200" ]; then mv "$f.tmp" "$f"; else rm -f "$f.tmp"; printf 'unknown'; return 0; fi
+  fi
+  jq -r --arg id "$id" '(.data|map(select(.id==$id))[0].pricing.prompt) // "unknown"' "$f" 2>/dev/null \
+    || printf 'unknown'
+}
+
+# ---------------------------------------------------------------- subcommands
+
+cmd_check() {
+  printf 'base url : %s%s\n' "$API_URL" \
+    "$([ "$API_URL" = "$DEFAULT_URL" ] && printf ' (default)' || true)"
+  if [ -n "$API_KEY" ]; then
+    printf 'api key  : set — %s\n' "$(redacted_key "$API_KEY")"
+  else
+    printf 'api key  : MISSING — set ORBIO_API_KEY in %s/.env\n' "$(repo_root)"
+  fi
+
+  local body status
+  body="$(mktemp)"; trap 'rm -f "$body"' RETURN
+  status="$(curl -sS --max-time 20 -H 'Accept: application/json' \
+    -w '%{http_code}' -o "$body" "${API_URL}/models")"
+  if [ "$status" = "200" ] && jq -e '.data|type=="array"' "$body" >/dev/null 2>&1; then
+    printf 'gateway  : reachable — %s models listed\n' "$(jq -r '.data|length' "$body")"
+  else
+    printf 'gateway  : UNREACHABLE — GET /models returned HTTP %s\n' "$status"
+    return 1
+  fi
+  [ -n "$API_KEY" ] || return 1
+}
+
+cmd_chat() {
+  require_key
+  local model="${1:-}" prompt="${2:-}"
+  [ -n "$model" ] || die "usage: orbio chat <model> <prompt|-> [--system S] [--max-tokens N] [--temperature T] [--json]"
+  [ $# -ge 2 ] || die "usage: orbio chat <model> <prompt|-> [flags]"
+  shift 2
+
+  [ "$prompt" = "-" ] && prompt="$(cat)"
+  [ -n "$prompt" ] || die "empty prompt"
+
+  local system="" max_tokens="" temperature="" raw=0 assume_yes=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --system)      system="${2:-}"; shift 2 ;;
+      --max-tokens)  max_tokens="${2:-}"; shift 2 ;;
+      --temperature) temperature="${2:-}"; shift 2 ;;
+      --json)        raw=1; shift ;;
+      --yes|-y)      assume_yes=1; shift ;;
+      *) die "chat: unknown flag '$1'" ;;
+    esac
+  done
+
+  # Spend gate. A paid completion is the user's call, not the agent's: the model
+  # and the prompt come from them. Free models run unattended so the path can be
+  # smoke-tested for nothing. Fails closed — an unknown or dynamically priced
+  # model counts as paid.
+  if [ "$assume_yes" != "1" ]; then
+    local pp cls
+    pp="$(model_prompt_price "$model")"
+    cls="$(jq -rn --arg p "$pp" '
+      if $p == "unknown" then "unknown"
+      elif $p == "-1" then "dynamic"
+      elif ($p|tonumber) == 0 then "free"
+      else "paid" end' 2>/dev/null || printf 'unknown')"
+    case "$cls" in
+      free) : ;;
+      paid)
+        printf 'orbio: %s is a PAID model ($%s/M prompt tokens).\n' \
+          "$model" "$(jq -rn --arg p "$pp" '($p|tonumber)*1000000|.*10000|round/10000')" >&2
+        die "confirm the model and the prompt with the user, then re-run with --yes.
+       Cheaper options:  skills/orbio-cost/scripts/orbio-cost cheapest 10
+       Forecast a cost:  skills/orbio-cost/scripts/orbio-cost estimate $model <in> <out>
+       Free smoke test:  orbio chat inclusionai/ling-3.0-flash-vl:free \"...\"" ;;
+      dynamic)
+        die "$model is dynamically priced — the cost cannot be known before the call.
+       Pick a fixed-price model, or re-run with --yes if the user accepted that." ;;
+      *)
+        die "could not read a price for '$model' (not in /models, or the table was unreachable).
+       Verify the id:  skills/orbio-cost/scripts/orbio-cost models ${model%%/*}
+       Or re-run with --yes if the user confirmed it." ;;
+    esac
+  fi
+
+  local payload
+  payload="$(jq -n \
+    --arg model "$model" --arg prompt "$prompt" --arg system "$system" \
+    --arg max_tokens "$max_tokens" --arg temperature "$temperature" '
+    {
+      model: $model,
+      messages: (
+        (if $system == "" then [] else [{role:"system", content:$system}] end)
+        + [{role:"user", content:$prompt}]
+      ),
+      usage: { include: true }
+    }
+    | if $max_tokens  == "" then . else .max_tokens  = ($max_tokens|tonumber)  end
+    | if $temperature == "" then . else .temperature = ($temperature|tonumber) end
+  ')"
+
+  local body headers status
+  body="$(mktemp)"; headers="$(mktemp)"
+  trap 'rm -f "$body" "$headers"' RETURN
+
+  status="$(curl -sS --max-time 180 \
+    -H "Authorization: Bearer ${API_KEY}" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json' \
+    -D "$headers" \
+    --data-binary @- \
+    -w '%{http_code}' -o "$body" \
+    "${API_URL}/chat/completions" <<<"$payload")"
+
+  if [ "$status" != "200" ]; then
+    printf 'orbio: POST /chat/completions returned HTTP %s\n' "$status" >&2
+    # Note the redirect order: `2>/dev/null >&2` would point stdout at
+    # /dev/null, silently eating the error message.
+    jq -r '.error.message // .error // .' "$body" >&2 2>/dev/null || head -c 500 "$body" >&2
+    case "$status" in
+      401) printf '\nhint: key rejected. Check ORBIO_API_KEY (currently %s).\n' "$(redacted_key "$API_KEY")" >&2 ;;
+      404) printf '\nhint: model id may be wrong. Look it up with the orbio-cost skill:\n        skills/orbio-cost/scripts/orbio-cost models %s\n' "${model%%/*}" >&2 ;;
+      429) printf '\nhint: rate limited. Documented limits: 120 req/min, 32 concurrent.\n' >&2 ;;
+    esac
+    return 1
+  fi
+
+  if [ "$raw" = "1" ]; then cat "$body"; return 0; fi
+
+  jq -r '.choices[0].message.content // .choices[0].text // "(no content in response)"' "$body"
+
+  local balance
+  balance="$(grep -i '^x-orbio-balance:' "$headers" | tr -d '\r' | cut -d' ' -f2- || true)"
+  jq -r --arg bal "$balance" '
+    "cost=$" + ((.usage.cost // 0) | tostring)
+    + " tokens=" + ((.usage.prompt_tokens // 0)|tostring) + "in/"
+    + ((.usage.completion_tokens // 0)|tostring) + "out"
+    + " model=" + (.model // "?")
+    + (if .provider then " provider=" + .provider else "" end)
+    + (if $bal != "" then " balance_before=" + $bal else "" end)
+  ' "$body" >&2
+}
+
+cmd_balance() {
+  require_key
+  local body status
+  body="$(mktemp)"; trap 'rm -f "$body"' RETURN
+
+  status="$(api_get "/key" "$body")"
+
+  if [ "$status" = "200" ] && jq -e 'type == "object" and has("balance")' "$body" >/dev/null 2>&1; then
+    printf 'GET /key → 200 JSON. PRD-1.0-sprint.md:20 is correct; api-notes.md P-2 is stale.\n\n'
+    jq . "$body"
+    printf '\nAction: append this shape to docs/api-notes.md under "Endpoints discovered"\n'
+    printf '(append, never rewrite history) so P-2 stops misleading the next session.\n'
+    return 0
+  fi
+
+  case "$status" in
+    401)
+      printf 'GET /key → 401: %s\n\n' "$(jq -r '.error.message // "key rejected"' "$body" 2>/dev/null)"
+      printf 'This is a KEY problem, not a missing endpoint. The route exists (probed\n'
+      printf '2026-09-20, x-matched-path: /api/v1/key). Current key: %s\n' "$(redacted_key "$API_KEY")"
+      printf 'Check it against the Orbio dashboard, or use MCP orbio_get_key_status to\n'
+      printf 'see whether it was revoked.\n'
+      ;;
+    200)
+      printf 'GET /key → 200 but no .balance field. Unrecognized shape:\n\n'
+      jq . "$body" 2>/dev/null || head -c 600 "$body"
+      printf '\n\nPer CLAUDE.md §6 this is an AdapterShapeError case: append a redacted\n'
+      printf 'sample to docs/api-notes.md under "Unrecognized samples".\n'
+      ;;
+    *)
+      printf 'GET /key → HTTP %s, %s\n\n' "$status" \
+        "$(jq -e . "$body" >/dev/null 2>&1 && echo 'JSON' || echo 'not JSON (HTML page)')"
+      printf 'The endpoint looks unimplemented, matching docs/api-notes.md P-2\n'
+      printf '(2026-09-08) and contradicting docs/PRD-1.0-sprint.md:20.\n'
+      ;;
+  esac
+
+  cat <<'EOF'
+
+Fall back to the MCP chain (probe P-1 = YES):
+  orbio_get_balance via https://www.orbio.so/api/mcp  (OAuth, interactive)
+
+Do not invent or estimate a balance figure. For a per-call signal, `orbio chat`
+reports the X-Orbio-Balance response header when the gateway sends it.
+EOF
+  return 1
+}
+
+usage() {
+  cat <<'EOF'
+orbio — run inference through the Orbio gateway (OpenAI-compatible)
+
+  orbio check                          verify key + base url + reachability
+  orbio chat <model> <prompt|-> [flags]  run a completion, report real usage.cost
+  orbio balance                        read remaining credit
+
+chat flags: --system <s>  --max-tokens <n>  --temperature <t>  --json
+            --yes   confirm a PAID call (required; free models run without it)
+
+Choosing a model, comparing prices and forecasting cost live in a separate
+skill, because they are read-only and free while this one spends money:
+  skills/orbio-cost/scripts/orbio-cost
+
+Env: ORBIO_API_KEY (required), ORBIO_API_URL (default https://api.orbio.so/api/v1)
+Both are read from the repo .env if not already exported. The key is never printed.
+EOF
+}
+
+case "${1:-}" in
+  check)    shift; cmd_check "$@" ;;
+  chat)     shift; cmd_chat "$@" ;;
+  balance)  shift; cmd_balance "$@" ;;
+  -h|--help|help|'') usage ;;
+  *) die "unknown command '$1' (try: orbio help)" ;;
+esac
